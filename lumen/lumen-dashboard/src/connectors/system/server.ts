@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
+import { withFallback } from '@/lib/fallback';
 import {
   bucketSeed,
   clamp,
@@ -63,15 +64,6 @@ function run(cmd: string, args: string[], timeoutMs = 4000): Promise<string> {
 
 function lines(out: string) {
   return out.split('\n').map((l) => l.trim()).filter((l) => l !== '');
-}
-
-/** Always return a payload: any failure in the live read falls back to the sample. */
-async function safe<T>(live: () => Promise<T>, fallback: () => T): Promise<T> {
-  try {
-    return await live();
-  } catch {
-    return fallback();
-  }
 }
 
 /* ---------- CPU sampling (module state, survives between requests) ---------- */
@@ -363,23 +355,27 @@ const connector: ConnectorServer = {
   isLive: () => true,
   handlers: {
     'system.overview': async () =>
-      safe<OverviewData>(readOverview, () => mockOverview(bucketSeed('system.overview', 5), HISTORY_MAX)),
+      withFallback('system.overview', true, readOverview, () => mockOverview(bucketSeed('system.overview', 5), HISTORY_MAX)),
 
     'system.disks': async (s) => {
       const minSizeGb = decimal(s, 'minSizeGb', 1, 0, 4096);
       const limit = count(s, 'limit', 6, 1, 30);
-      return safe<DisksData>(
+      return withFallback(
+        'system.disks',
+        true,
         () => readDisks(minSizeGb, limit),
         () => mockDisks(minSizeGb, limit),
       );
     },
 
-    'system.gpu': async () => safe<GpuData>(readGpu, () => mockGpu(bucketSeed('system.gpu', 15))),
+    'system.gpu': async () => withFallback('system.gpu', true, readGpu, () => mockGpu(bucketSeed('system.gpu', 15))),
 
     'system.processes': async (s) => {
       const limit = count(s, 'limit', 6, 1, 30);
       const sortBy = choice(s, 'sortBy', ['cpu', 'memory'] as const, 'cpu');
-      return safe<ProcessesData>(
+      return withFallback(
+        'system.processes',
+        true,
         () => readProcesses(limit, sortBy),
         () => mockProcesses(limit, sortBy),
       );

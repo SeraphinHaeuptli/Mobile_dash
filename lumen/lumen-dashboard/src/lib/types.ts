@@ -75,7 +75,10 @@ export interface WidgetResponse {
   ok: boolean;
   data?: Json;
   error?: string;
-  mode: 'mock' | 'live';
+  /** 'stale' = a live call failed and mock data was served instead; see `warning`. */
+  mode: 'mock' | 'live' | 'stale';
+  /** Set when mode is 'stale': why the live call failed, e.g. "Stripe 401 on /balance". */
+  warning?: string;
   fetchedAt: string;
 }
 

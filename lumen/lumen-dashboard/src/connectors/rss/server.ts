@@ -1,4 +1,5 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
+import { logFetch, withFallback } from '@/lib/fallback';
 import { seeded, intBetween, pick, minutesFromNow } from '@/lib/mock';
 
 /** No credentials needed — this connector just fetches and parses a feed URL. */
@@ -153,6 +154,7 @@ async function liveFeed(url: string, limit: number): Promise<FeedData> {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported feed protocol');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
+  const start = Date.now();
   try {
     const res = await fetch(parsed.toString(), {
       headers: {
@@ -162,6 +164,7 @@ async function liveFeed(url: string, limit: number): Promise<FeedData> {
       signal: controller.signal,
       cache: 'no-store',
     });
+    logFetch('GET', parsed.toString(), res.status, Date.now() - start);
     if (!res.ok) throw new Error(`Feed ${res.status}`);
     const xml = await res.text();
     const data = parseFeed(xml, url, limit);
@@ -239,11 +242,12 @@ const connector: ConnectorServer = {
     'rss.feed': async (s) => {
       const url = textSetting(s, 'url', 'https://hnrss.org/frontpage');
       const limit = numberSetting(s, 'limit', 8, 1, 40);
-      try {
-        return await liveFeed(url, limit);
-      } catch {
-        return mockFeed(seedFor('rss.feed', s), url, limit);
-      }
+      return withFallback(
+        'rss.feed',
+        true,
+        () => liveFeed(url, limit),
+        () => mockFeed(seedFor('rss.feed', s), url, limit),
+      );
     },
   },
 };

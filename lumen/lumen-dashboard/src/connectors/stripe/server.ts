@@ -5,6 +5,7 @@
  */
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
+import { logFetch, withFallback } from '@/lib/fallback';
 import { seeded, intBetween } from '@/lib/mock';
 
 const ENV = ['STRIPE_SECRET_KEY'];
@@ -87,10 +88,12 @@ function today(): string {
 
 async function stripeGet(path: string): Promise<unknown> {
   const key = process.env.STRIPE_SECRET_KEY ?? '';
+  const start = Date.now();
   const res = await fetch(`${API}/${path}`, {
     headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
     cache: 'no-store',
   });
+  logFetch('GET', `${API}/${path}`, res.status, Date.now() - start);
   if (!res.ok) throw new Error(`Stripe ${res.status} on /${path}`);
   return (await res.json()) as unknown;
 }
@@ -338,15 +341,6 @@ function mockPayments(settings: WidgetSettings): StripePaymentsData {
 
 /* ---------- connector ---------- */
 
-async function resolve<T>(live: () => Promise<T>, fallback: () => T): Promise<T> {
-  if (!hasEnv(ENV)) return fallback();
-  try {
-    return await live();
-  } catch {
-    return fallback();
-  }
-}
-
 const connector: ConnectorServer = {
   meta: {
     id: 'stripe',
@@ -359,9 +353,9 @@ const connector: ConnectorServer = {
   },
   isLive: () => hasEnv(ENV),
   handlers: {
-    'stripe.balance': (s) => resolve(() => liveBalance(s), () => mockBalance(s)),
-    'stripe.revenue': (s) => resolve(() => liveRevenue(s), () => mockRevenue(s)),
-    'stripe.payments': (s) => resolve(() => livePayments(s), () => mockPayments(s)),
+    'stripe.balance': (s) => withFallback('stripe.balance', hasEnv(ENV), () => liveBalance(s), () => mockBalance(s)),
+    'stripe.revenue': (s) => withFallback('stripe.revenue', hasEnv(ENV), () => liveRevenue(s), () => mockRevenue(s)),
+    'stripe.payments': (s) => withFallback('stripe.payments', hasEnv(ENV), () => livePayments(s), () => mockPayments(s)),
   },
 };
 

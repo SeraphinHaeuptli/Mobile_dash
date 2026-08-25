@@ -1,0 +1,9 @@
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+npm-debug.log*
+
+# local state — see PROJECT.md
+data/
+.env.local
+.env*.local

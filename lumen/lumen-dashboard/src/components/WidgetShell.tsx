@@ -36,6 +36,11 @@ export default function WidgetShell({ item, editing, onRemove, onConfigure }: Pr
         <span className="widget-dot" style={{ background: connector?.accent ?? 'var(--accent)' }} />
         <span className="widget-title" title={def.description}>{title}</span>
         {res?.mode === 'mock' && <span className="pill" style={{ fontSize: 10 }}>sample</span>}
+        {res?.mode === 'stale' && (
+          <span className="pill warn" style={{ fontSize: 10 }} title={res.warning ?? 'live fetch failed'}>
+            stale
+          </span>
+        )}
         <span className="spacer" />
         <span className="widget-actions">
           <button className="btn icon" title="Refresh" onClick={() => void reload()} disabled={loading}>↻</button>
@@ -54,7 +59,7 @@ export default function WidgetShell({ item, editing, onRemove, onConfigure }: Pr
           </div>
         ) : res?.ok ? (
           <ErrorBoundary widgetId={item.widgetId}>
-            <Component data={res.data as never} settings={item.settings} mode={res.mode} />
+            <Component data={res.data as never} settings={item.settings} mode={res.mode === 'mock' ? 'mock' : 'live'} />
           </ErrorBoundary>
         ) : (
           <Empty>

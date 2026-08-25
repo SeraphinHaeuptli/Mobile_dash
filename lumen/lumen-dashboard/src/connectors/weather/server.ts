@@ -1,4 +1,5 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
+import { logFetch, withFallback } from '@/lib/fallback';
 import { seeded, intBetween, pick } from '@/lib/mock';
 
 /**
@@ -164,8 +165,10 @@ async function openMeteo(place: Place, extra: Record<string, string>): Promise<u
   });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
+  const start = Date.now();
   try {
     const res = await fetch(`${API}?${params.toString()}`, { signal: controller.signal, cache: 'no-store' });
+    logFetch('GET', `${API}?${params.toString()}`, res.status, Date.now() - start);
     if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
     return (await res.json()) as unknown;
   } finally {
@@ -313,14 +316,6 @@ function mockForecast(seed: string, place: Place, days: number): ForecastData {
 
 /* ---------- connector ---------- */
 
-async function safe<T>(live: () => Promise<T>, fallback: () => T): Promise<T> {
-  try {
-    return await live();
-  } catch {
-    return fallback();
-  }
-}
-
 const connector: ConnectorServer = {
   meta: {
     id: 'weather',
@@ -335,7 +330,9 @@ const connector: ConnectorServer = {
   handlers: {
     'weather.current': async (s) => {
       const place = placeOf(s);
-      return safe<CurrentData>(
+      return withFallback(
+        'weather.current',
+        true,
         () => liveCurrent(place),
         () => mockCurrent(seedFor('weather.current', s), place),
       );
@@ -343,7 +340,9 @@ const connector: ConnectorServer = {
     'weather.forecast': async (s) => {
       const place = placeOf(s);
       const days = Math.min(10, Math.max(1, Math.round(numberSetting(s, 'days', 5))));
-      return safe<ForecastData>(
+      return withFallback(
+        'weather.forecast',
+        true,
         () => liveForecast(place, days),
         () => mockForecast(seedFor('weather.forecast', s), place, days),
       );

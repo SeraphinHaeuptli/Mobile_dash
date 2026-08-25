@@ -21,9 +21,22 @@ export function resolveWidget(widgetId: string) {
   return { connector, handler };
 }
 
-export async function runWidget(widgetId: string, settings: WidgetSettings): Promise<{ data: Json; mode: 'mock' | 'live' }> {
+function isRec(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+export async function runWidget(
+  widgetId: string,
+  settings: WidgetSettings,
+): Promise<{ data: Json; mode: 'mock' | 'live' | 'stale'; warning?: string }> {
   const found = resolveWidget(widgetId);
   if (!found) throw new Error(`Unknown widget: ${widgetId}`);
-  const data = await found.handler(settings);
-  return { data, mode: found.connector.isLive() ? 'live' : 'mock' };
+  const raw = await found.handler(settings);
+  // A handler that fell back after a failed live call marks it with `_fallback`
+  // (see src/lib/fallback.ts); strip it out and surface it as a warning instead.
+  if (isRec(raw) && typeof raw._fallback === 'string') {
+    const { _fallback, ...data } = raw;
+    return { data, mode: 'stale', warning: _fallback };
+  }
+  return { data: raw, mode: found.connector.isLive() ? 'live' : 'mock' };
 }

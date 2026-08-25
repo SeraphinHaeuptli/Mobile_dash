@@ -1,5 +1,6 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
+import { logFetch, withFallback } from '@/lib/fallback';
 import {
   mockActivity,
   mockContributions,
@@ -52,6 +53,7 @@ function num(v: unknown, fallback = 0): number {
 async function gh(path: string, init?: { method?: string; body?: string }): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
+  const start = Date.now();
   try {
     const res = await fetch(`${API}${path}`, {
       method: init?.method ?? 'GET',
@@ -66,6 +68,7 @@ async function gh(path: string, init?: { method?: string; body?: string }): Prom
       signal: controller.signal,
       cache: 'no-store',
     });
+    logFetch(init?.method ?? 'GET', `${API}${path}`, res.status, Date.now() - start);
     if (!res.ok) throw new Error(`GitHub ${res.status}`);
     return (await res.json()) as unknown;
   } finally {
@@ -176,15 +179,6 @@ async function liveContributions(username: string): Promise<ContribData> {
 
 /* ---------- connector ---------- */
 
-async function safe<T>(live: () => Promise<T>, fallback: () => T): Promise<T> {
-  if (!hasEnv(ENV)) return fallback();
-  try {
-    return await live();
-  } catch {
-    return fallback();
-  }
-}
-
 const connector: ConnectorServer = {
   meta: {
     id: 'github',
@@ -200,7 +194,9 @@ const connector: ConnectorServer = {
     'github.activity': async (s) => {
       const username = text(s, 'username', 'octocat');
       const limit = count(s, 'limit', 8, 1, 30);
-      return safe<ActivityData>(
+      return withFallback(
+        'github.activity',
+        hasEnv(ENV),
         () => liveActivity(username, limit),
         () => mockActivity(seedFor('github.activity', s), username, limit),
       );
@@ -209,14 +205,18 @@ const connector: ConnectorServer = {
       const username = text(s, 'username', 'octocat');
       const sort = text(s, 'sort', 'updated');
       const limit = count(s, 'limit', 6, 1, 30);
-      return safe<ReposData>(
+      return withFallback(
+        'github.repos',
+        hasEnv(ENV),
         () => liveRepos(username, sort, limit),
         () => mockRepos(seedFor('github.repos', s), username, sort, limit),
       );
     },
     'github.contributions': async (s) => {
       const username = text(s, 'username', 'octocat');
-      return safe<ContribData>(
+      return withFallback(
+        'github.contributions',
+        hasEnv(ENV),
         () => liveContributions(username),
         () => mockContributions(seedFor('github.contributions', s), username),
       );
