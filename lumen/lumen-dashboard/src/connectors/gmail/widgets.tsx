@@ -1,5 +1,5 @@
 'use client';
-import type { WidgetModule, WidgetProps } from '@/lib/types';
+import type { WidgetModule, WidgetProps, WidgetMode } from '@/lib/types';
 import { Stat, Rows, Row, Empty, relTime } from '@/components/ui';
 
 /* ---------- shape returned by ./server.ts ---------- */
@@ -19,7 +19,7 @@ interface InboxData {
   threads: MailThread[];
 }
 
-function SampleHint({ mode }: { mode: 'mock' | 'live' }) {
+function SampleHint({ mode }: { mode: WidgetMode }) {
   if (mode === 'live') return <></>;
   return (
     <div className="faint" style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: 10 }}>

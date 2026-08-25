@@ -1,5 +1,5 @@
 'use client';
-import type { WidgetModule, WidgetProps } from '@/lib/types';
+import type { WidgetModule, WidgetProps, WidgetMode } from '@/lib/types';
 import { Stat, StatGrid, Rows, Row, Pill, Sparkline, Empty, money, relTime } from '@/components/ui';
 
 /* ---------- shapes returned by ./server.ts ---------- */
@@ -43,7 +43,7 @@ interface PaymentsData {
   charges: Payment[];
 }
 
-function SampleHint({ mode }: { mode: 'mock' | 'live' }) {
+function SampleHint({ mode }: { mode: WidgetMode }) {
   if (mode === 'live') return <></>;
   return (
     <div className="faint" style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: 10 }}>

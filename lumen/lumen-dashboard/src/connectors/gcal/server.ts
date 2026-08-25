@@ -6,6 +6,8 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
 import { mockCalendar } from './mock';
+import { withFallback } from '@/lib/fallback';
+import { debugFetch } from '@/lib/debug';
 
 const ENV = ['GOOGLE_CALENDAR_TOKEN'];
 const API = 'https://www.googleapis.com/calendar/v3';
@@ -76,7 +78,7 @@ async function fetchEvents(calendarId: string, timeMin: Date, timeMax: Date, max
     `?timeMin=${encodeURIComponent(timeMin.toISOString())}` +
     `&timeMax=${encodeURIComponent(timeMax.toISOString())}` +
     `&singleEvents=true&orderBy=startTime&maxResults=${maxResults}`;
-  const res = await fetch(url, {
+  const res = await debugFetch(url, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     cache: 'no-store',
   });
@@ -145,15 +147,6 @@ function mockNext(settings: WidgetSettings): NextEventData {
   return { calendarId, event: firstNotStarted(mockCalendar(calendarId, 14)) };
 }
 
-async function resolve<T>(live: () => Promise<T>, fallback: () => T): Promise<T> {
-  if (!hasEnv(ENV)) return fallback();
-  try {
-    return await live();
-  } catch {
-    return fallback();
-  }
-}
-
 const connector: ConnectorServer = {
   meta: {
     id: 'gcal',
@@ -166,8 +159,8 @@ const connector: ConnectorServer = {
   },
   isLive: () => hasEnv(ENV),
   handlers: {
-    'gcal.agenda': (s) => resolve(() => liveAgenda(s), () => mockAgenda(s)),
-    'gcal.next': (s) => resolve(() => liveNext(s), () => mockNext(s)),
+    'gcal.agenda': (s) => withFallback(hasEnv(ENV), () => liveAgenda(s), () => mockAgenda(s), 'gcal.agenda'),
+    'gcal.next': (s) => withFallback(hasEnv(ENV), () => liveNext(s), () => mockNext(s), 'gcal.next'),
   },
 };
 

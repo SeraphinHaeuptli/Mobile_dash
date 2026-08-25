@@ -1,5 +1,7 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { seeded, intBetween, pick } from '@/lib/mock';
+import { withFallback } from '@/lib/fallback';
+import { debugFetch } from '@/lib/debug';
 
 /**
  * Open-Meteo needs no API key, so this connector is always live and only falls
@@ -165,7 +167,7 @@ async function openMeteo(place: Place, extra: Record<string, string>): Promise<u
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch(`${API}?${params.toString()}`, { signal: controller.signal, cache: 'no-store' });
+    const res = await debugFetch(`${API}?${params.toString()}`, { signal: controller.signal, cache: 'no-store' });
     if (!res.ok) throw new Error(`Open-Meteo ${res.status}`);
     return (await res.json()) as unknown;
   } finally {
@@ -313,14 +315,6 @@ function mockForecast(seed: string, place: Place, days: number): ForecastData {
 
 /* ---------- connector ---------- */
 
-async function safe<T>(live: () => Promise<T>, fallback: () => T): Promise<T> {
-  try {
-    return await live();
-  } catch {
-    return fallback();
-  }
-}
-
 const connector: ConnectorServer = {
   meta: {
     id: 'weather',
@@ -333,20 +327,14 @@ const connector: ConnectorServer = {
   },
   isLive: () => true,
   handlers: {
-    'weather.current': async (s) => {
+    'weather.current': (s) => {
       const place = placeOf(s);
-      return safe<CurrentData>(
-        () => liveCurrent(place),
-        () => mockCurrent(seedFor('weather.current', s), place),
-      );
+      return withFallback(true, () => liveCurrent(place), () => mockCurrent(seedFor('weather.current', s), place), 'weather.current');
     },
-    'weather.forecast': async (s) => {
+    'weather.forecast': (s) => {
       const place = placeOf(s);
       const days = Math.min(10, Math.max(1, Math.round(numberSetting(s, 'days', 5))));
-      return safe<ForecastData>(
-        () => liveForecast(place, days),
-        () => mockForecast(seedFor('weather.forecast', s), place, days),
-      );
+      return withFallback(true, () => liveForecast(place, days), () => mockForecast(seedFor('weather.forecast', s), place, days), 'weather.forecast');
     },
   },
 };

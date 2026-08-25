@@ -1,6 +1,12 @@
 # PROJECT.md — Lumen Dashboard (context handoff)
 
-Machine-readable state dump for an AI agent picking up this repo. Terse by design.
+**This file is machine-maintained: written by and for an AI agent working this repo
+unattended, across sessions.** Terse by design. Read this fully, then read PLAN.md's
+checkboxes before doing anything — PLAN.md says what's next, this file says what
+exists and what was learned doing it. After finishing a checked-off PLAN.md item,
+append (don't rewrite) a dated bullet to "Session log" below with what you changed,
+how you verified it (a command actually run, not "should work"), and anything
+surprising for the next session. Keep old entries; this is a log, not a status page.
 
 ## What it is
 Local-first personal dashboard. Next.js 14 App Router · React 18 · TypeScript strict ·
@@ -26,6 +32,14 @@ src/lib/store.ts            read/writeConfig -> data/layout.json + DEFAULT_CONFI
 src/lib/env.ts              hasEnv(keys)
 src/lib/mock.ts             seeded() pick() intBetween() walk() minutesFromNow()
 src/lib/useWidgetData.ts    client hook: POST /api/widget/<id>, auto-refresh, reload()
+src/lib/fallback.ts         withFallback(configured, live, mock, label) -> {data,mode,warning?}
+                            THE live/mock split, used by all 7 connectors. mode is
+                            'mock' (no creds, silent) | 'live' | 'stale' (creds present,
+                            live call threw, mock shown with warning = reason).
+src/lib/debug.ts            debugFetch(url, init) — fetch() drop-in; logs one line
+                            (method/url/status/ms, never headers/secrets) per request
+                            when DEBUG_CONNECTORS=1. Used by every connector's network
+                            transport fn. system connector has no network calls, skipped.
 
 src/app/layout.tsx          server; reads config, sets data-theme + --accent on <html>
 src/app/page.tsx            server; renders <Dashboard initial={config}/>
@@ -63,8 +77,15 @@ src/connectors/<id>/mock.ts     optional
 ## Conventions (must hold for new code)
 - Widget id = `<connectorId>.<name>`. Handler keys in server.ts use the full widget id.
 - Live path and mock path MUST return the identical TypeScript shape.
-- Every live call is wrapped in try/catch and **silently falls back to mock** on failure.
-  (Known weakness — see PLAN.md Phase 0.)
+- Every live call goes through `withFallback(configured, live, mock, label)` from
+  `src/lib/fallback.ts` (PLAN.md Phase 0, done). `configured=false` -> silent mock
+  (`mode:'mock'`). `configured=true` and `live()` throws -> mock is still returned
+  (widget stays usable) but as `mode:'stale'` with `warning` set to `label + reason`,
+  and `WidgetShell.tsx` renders an amber "fallback" pill with the reason as its
+  tooltip instead of silently claiming "sample". Do NOT hand-roll a new try/catch in a
+  connector handler — call `withFallback`.
+- Every connector's network transport function calls `debugFetch()` (src/lib/debug.ts)
+  instead of the global `fetch` — same signature, opt-in request logging.
 - `isLive()` = `hasEnv(ENV)`. Keyless connectors return `true` and rely on the fallback.
 - Mocks are deterministic: `seeded(widgetId + settings + today)`.
 - Widget UI is built only from `@/components/ui` primitives + globals.css classes.
@@ -84,7 +105,51 @@ tsc clean · next build clean · all 16 widget endpoints return ok:true ·
 Playwright pass: add → configure → drag → persist → reload → remove, zero console errors.
 Two bugs found and fixed this way: inbox list overflowing its footer (flex:1 + minHeight:0
 without overflow:auto), and header buttons swallowed by the RGL drag handle.
+(2026-08-25: re-verified tsc/build clean after Phase 0; Playwright flow not re-run this
+session, no browser UI check was performed, see Session log.)
 
 ## Not done
-Real credentials never exercised against any live API. No caching, no rate-limit handling,
-no OAuth refresh, no tests, no error state distinct from mock. See PLAN.md.
+No caching (Phase 1), no RSS SSRF guard (Phase 1), no real credentials exercised against
+Stripe/GitHub/Google (Phases 2-4), no OAuth refresh, no tests (Phase 6). Phase 0 (honest
+error states, replacing "no error state distinct from mock") is done — see PLAN.md and
+Session log below.
+
+## Session log
+(newest first; each entry is one AI work session)
+
+- **2026-08-25 — Phase 0 done.** Added `WidgetMode`/`HandlerResult` to types.ts,
+  `src/lib/fallback.ts` (`withFallback`) and `src/lib/debug.ts` (`debugFetch`); migrated
+  all 7 connectors off their duplicated local `resolve`/`safe` try/catch helpers onto
+  `withFallback`; `WidgetShell.tsx` now renders an amber "fallback" pill (title=reason)
+  for `mode:'stale'`, distinct from the neutral "sample" pill for `mode:'mock'`.
+  Verified: fresh `npm install` (node_modules wasn't present), `npx tsc --noEmit` clean,
+  `npm run build` clean, then `npm run dev` and curled all 16 widget endpoints — all
+  `ok:true`. stripe/gcal/gmail (uncredentialed here) → `mode:'mock'`. weather/rss →
+  `mode:'stale'` (this sandbox's egress returns HTTP 403 to Open-Meteo/hnrss — no real
+  internet from here, expected). github → `mode:'stale'`, `GitHub 401` (this sandbox has
+  an ambient `GITHUB_TOKEN` for unrelated tooling that isn't valid against the GitHub
+  REST API — real signal, not a bug). system.overview/disks/processes → `mode:'live'`
+  (real host reads). system.gpu → `mode:'stale'`, `spawn nvidia-smi ENOENT` (no GPU in
+  this container, matches PLAN.md Phase 1's note that GPU needs the target machine).
+  Also verified `DEBUG_CONNECTORS=1 npm run dev` logs one `[connectors] METHOD url ->
+  status Nms` line per outbound request with no headers/secrets in the log.
+  Added `lumen-dashboard/.gitignore` (node_modules/.next/tsbuildinfo/data) — none
+  existed before this session, `npm install`/`npm run build` were leaving large
+  untracked-but-stageable directories.
+  **Not done this session:** no browser/Playwright check (no browser available in this
+  execution context — this was an unattended scheduled run, not an interactive one).
+  **Flag for a future session, not acted on:** `npm install` warns
+  `next@14.2.15: This version has a security vulnerability` (a real advisory, not this
+  repo's own code) — worth a deliberate, tested Next.js upgrade at some point; not part
+  of PLAN.md Phase 0-6 and risky to do unprompted mid-connector-work, so left alone.
+  **Process note:** did this phase via 7 parallel subagents (one per connector) plus
+  hand-written shared/core files. Mid-run, one subagent ran a pathspec-less `git stash`
+  to diff against a clean baseline, which caught other agents' and this session's own
+  uncommitted edits (including the shared types.ts/registry.server.ts/route.ts/
+  WidgetShell.tsx changes) in the stash; it then `git checkout stash@{0} -- <its own 2
+  files>` and dropped the stash, which would have silently discarded everyone else's
+  work. Recovered fully via `git fsck` finding the dropped stash as a dangling commit
+  and `git checkout <sha> -- <lost paths>` from it — nothing was actually lost, but note
+  for future sessions: never let a subagent run bare `git stash`/`git stash drop` in a
+  shared working tree; if a subagent needs a clean-baseline diff, tell it to use
+  `git diff` / a separate worktree instead.

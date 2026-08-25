@@ -9,6 +9,14 @@ export type Json = unknown;
 
 export type WidgetSettings = Record<string, string | number | boolean>;
 
+/**
+ * 'mock'  - connector has no credentials configured, sample data by design.
+ * 'live'  - real data from the upstream API.
+ * 'stale' - connector IS configured but the live call failed; sample data is
+ *           shown anyway so the widget stays useful, with `warning` saying why.
+ */
+export type WidgetMode = 'mock' | 'live' | 'stale';
+
 export interface WidgetSettingField {
   key: string;
   label: string;
@@ -34,13 +42,21 @@ export interface ConnectorMeta {
   docsUrl?: string;
 }
 
+/** What a connector handler resolves to: the payload plus how it was obtained. */
+export interface HandlerResult {
+  data: Json;
+  mode: WidgetMode;
+  /** present only for mode 'stale': why the live call fell back to mock */
+  warning?: string;
+}
+
 /** Server-side half of a connector: turns (widgetId, settings) into data. */
 export interface ConnectorServer {
   meta: ConnectorMeta;
   /** true when every env key is present -> live data, otherwise mock data */
   isLive(): boolean;
   /** keyed by widget id, e.g. 'stripe.balance' */
-  handlers: Record<string, (settings: WidgetSettings) => Promise<Json>>;
+  handlers: Record<string, (settings: WidgetSettings) => Promise<HandlerResult>>;
 }
 
 export interface WidgetDef {
@@ -60,8 +76,7 @@ export interface WidgetDef {
 export interface WidgetProps<T = Json> {
   data: T;
   settings: WidgetSettings;
-  /** 'mock' when the connector has no credentials configured */
-  mode: 'mock' | 'live';
+  mode: WidgetMode;
 }
 
 /** Client-side half of a widget: the definition plus its React component. */
@@ -75,7 +90,9 @@ export interface WidgetResponse {
   ok: boolean;
   data?: Json;
   error?: string;
-  mode: 'mock' | 'live';
+  mode: WidgetMode;
+  /** present only for mode 'stale': why the live call fell back to mock */
+  warning?: string;
   fetchedAt: string;
 }
 

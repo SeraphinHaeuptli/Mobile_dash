@@ -1,5 +1,6 @@
 'use client';
 import type { WidgetModule, WidgetProps } from '@/lib/types';
+import type { WidgetMode } from '@/lib/types';
 import { Empty, Row, Rows, Stat, StatGrid, compact, relTime } from '@/components/ui';
 
 /* ---------- shapes returned by server.ts ---------- */
@@ -57,7 +58,7 @@ const GLYPH: Record<ActivityKind, string> = {
   release: '⚑',
 };
 
-function SampleHint({ mode }: { mode: 'mock' | 'live' }) {
+function SampleHint({ mode }: { mode: WidgetMode }) {
   if (mode === 'live') return null;
   return <div className="faint" style={{ fontSize: 11, marginTop: 8, textAlign: 'right' }}>sample data</div>;
 }
