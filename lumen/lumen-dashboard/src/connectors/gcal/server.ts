@@ -6,10 +6,12 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cacheKey } from '@/lib/cache';
 import { mockCalendar } from './mock';
 
 const ENV = ['GOOGLE_CALENDAR_TOKEN'];
 const API = 'https://www.googleapis.com/calendar/v3';
+const CACHE_TTL_SECONDS = 60;
 
 /* ---------- data shapes (mock and live return exactly these) ---------- */
 
@@ -158,8 +160,16 @@ const connector: ConnectorServer = {
   },
   isLive: () => hasEnv(ENV),
   handlers: {
-    'gcal.agenda': (s) => withFallback(hasEnv(ENV), () => liveAgenda(s), () => mockAgenda(s), 'gcal.agenda'),
-    'gcal.next': (s) => withFallback(hasEnv(ENV), () => liveNext(s), () => mockNext(s), 'gcal.next'),
+    'gcal.agenda': (s) =>
+      withFallback(hasEnv(ENV), () => liveAgenda(s), () => mockAgenda(s), 'gcal.agenda', {
+        key: cacheKey('gcal.agenda', s),
+        ttlSeconds: CACHE_TTL_SECONDS,
+      }),
+    'gcal.next': (s) =>
+      withFallback(hasEnv(ENV), () => liveNext(s), () => mockNext(s), 'gcal.next', {
+        key: cacheKey('gcal.next', s),
+        ttlSeconds: CACHE_TTL_SECONDS,
+      }),
   },
 };
 

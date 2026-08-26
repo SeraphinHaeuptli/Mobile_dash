@@ -1,9 +1,13 @@
+import net from 'node:net';
+import dns from 'node:dns/promises';
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cacheKey } from '@/lib/cache';
 import { seeded, intBetween, pick, minutesFromNow } from '@/lib/mock';
 
-/** No credentials needed — this connector just fetches and parses a feed URL. */
+/** No credentials needed — this connector just fetches and parses a feed url. */
 const ENV: string[] = [];
+const CACHE_TTL_SECONDS = 300;
 
 export interface FeedItem {
   id: string;
@@ -147,11 +151,64 @@ export function parseFeed(xml: string, url: string, limit: number): FeedData {
   return { title: feedTitle, url, items };
 }
 
-/* ---------- live ---------- */
+/* ---------- SSRF guard ----------
+ * The feed url is user input. Reject anything that isn't a plain http(s) url,
+ * and reject any hostname that resolves to a private/internal address — most
+ * importantly 169.254.169.254, the cloud metadata endpoint. The DNS lookup
+ * happens once, right before the fetch it gates; it does not stop a hostname
+ * from being re-resolved to a different address between the check and the
+ * fetch (DNS rebinding), which would need pinning the fetch to the checked
+ * address — out of scope for what PLAN.md Phase 1 asks for here.
+ */
 
-async function liveFeed(url: string, limit: number): Promise<FeedData> {
+function isPrivateIPv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) return false;
+  const [a, b] = parts;
+  if (a === 0) return true; // 0.0.0.0/8
+  if (a === 127) return true; // 127.0.0.0/8 loopback
+  if (a === 10) return true; // 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16, incl. cloud metadata
+  return false;
+}
+
+function isPrivateIPv6(ip: string): boolean {
+  const norm = ip.toLowerCase();
+  if (norm === '::1' || norm === '::') return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(norm);
+  if (mapped) return isPrivateIPv4(mapped[1]);
+  return false;
+}
+
+function isPrivateAddress(ip: string): boolean {
+  const version = net.isIP(ip);
+  if (version === 4) return isPrivateIPv4(ip);
+  if (version === 6) return isPrivateIPv6(ip);
+  return true; // not a recognisable literal -> treat as unsafe
+}
+
+/** Throws when `url` is not a fetchable public http(s) address. Never falls back to mock. */
+async function assertPublicFeedUrl(url: string): Promise<URL> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported feed protocol');
+  const hostname = parsed.hostname;
+  if (net.isIP(hostname)) {
+    if (isPrivateAddress(hostname)) throw new Error(`Feed host is a private address (${hostname})`);
+    return parsed;
+  }
+  const records = await dns.lookup(hostname, { all: true, verbatim: true });
+  if (!records.length) throw new Error('Feed host did not resolve');
+  const bad = records.find((r) => isPrivateAddress(r.address));
+  if (bad) throw new Error(`Feed host resolves to a private address (${bad.address})`);
+  return parsed;
+}
+
+/* ---------- live ---------- */
+
+async function liveFeed(parsed: URL, limit: number): Promise<FeedData> {
+  const url = parsed.toString();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -237,10 +294,19 @@ const connector: ConnectorServer = {
   },
   isLive: () => true,
   handlers: {
-    'rss.feed': (s) => {
+    'rss.feed': async (s) => {
       const url = textSetting(s, 'url', 'https://hnrss.org/frontpage');
       const limit = numberSetting(s, 'limit', 8, 1, 40);
-      return withFallback(true, () => liveFeed(url, limit), () => mockFeed(seedFor('rss.feed', s), url, limit), 'rss.feed');
+      // A blocked url is a bad setting, not an upstream hiccup: surface it as a
+      // real error rather than quietly serving sample headlines for it.
+      const parsed = await assertPublicFeedUrl(url);
+      return withFallback(
+        true,
+        () => liveFeed(parsed, limit),
+        () => mockFeed(seedFor('rss.feed', s), url, limit),
+        'rss.feed',
+        { key: cacheKey('rss.feed', s), ttlSeconds: CACHE_TTL_SECONDS },
+      );
     },
   },
 };

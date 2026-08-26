@@ -56,24 +56,48 @@ implemented".
 
 ---
 
-## Phase 1 — keyless connectors first (~1h)
+## Phase 1 — keyless connectors first (~1h) — steps 1–2 DONE 2026-08-26, step 3 blocked
 
 Weather, RSS and System already run live; harden them.
 
-- [ ] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
+- [x] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
    `widgetId + JSON.stringify(settings)`. Wrap live calls. TTLs: weather 600s, rss 300s,
    github 120s, stripe 60s, gcal/gmail 60s; system not cached.
    → verify: hammer `/api/widget/weather.current` 10× and count 1 upstream request in
    DEBUG_CONNECTORS output.
-- [ ] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
+   → **verified at the logic level, not over HTTP** — see the note below: no connector has
+   a reachable upstream from this sandbox, and failures are deliberately not cached, so
+   the "10 calls, 1 upstream request" test cannot be run end-to-end here. It was run
+   against the real `cache.ts` + `fallback.ts` modules with a stubbed `live()` instead
+   (11 assertions, all passing). Re-run the HTTP version on a machine with real egress.
+- [x] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
    reject hosts resolving to private ranges (127/8, 10/8, 172.16/12, 192.168/16,
    169.254/16, ::1).
    → verify: `url=file:///etc/passwd` and `url=http://169.254.169.254/` both return an
    error state, not data.
+   → verified end-to-end over HTTP: both, plus `http://localhost:3000/`,
+   `http://127.0.0.1/feed` and `http://10.0.0.1/feed`, return `ok:false` with a specific
+   reason and no feed data.
 - [ ] 3. **System GPU.** Only path needing the target machine (Ryzen 5 / RTX 3070). Run
    `system.gpu` there, confirm `nvidia-smi` parsing against real output, multi-GPU safe.
    → verify: values match `nvidia-smi` run manually, within one refresh interval.
-   (Needs the human's actual machine — cannot be done from a sandboxed agent session.)
+   **BLOCKED — needs the human's actual machine.** No `nvidia-smi` and no NVIDIA device in
+   this container; `system.gpu` correctly reports `mode:"stale"` here. Everything else in
+   Phase 1 is done, so this single box is all that is left of the phase.
+
+Implementation notes for future sessions: caching is not a separate wrapper — it is an
+optional 5th argument on `withFallback(hasCreds, live, mock, label, cache?)`, where `cache`
+is `{ key, ttlSeconds }` and `key` comes from `cacheKey(widgetId, settings)`. It wraps only
+the `live()` call. Two deliberate choices: a cache hit returns `mode:'live'` (it is real
+data, merely not re-fetched), and **failures are never cached**, so a transient 500 does
+not pin a widget to sample data for the whole TTL — the next call retries. The `system`
+connector is uncached per the plan and uses `fromSample()`, which takes no cache argument.
+The RSS guard lives in `assertPublicFeedUrl()` in `src/connectors/rss/server.ts` and is
+called in the handler *before* `withFallback`, deliberately outside it: a blocked url is a
+bad setting, not an upstream hiccup, so it must surface as a real `ok:false` error rather
+than quietly serving sample headlines. Known limitation, documented in the code: the DNS
+check does not pin the resolved address for the subsequent fetch, so it does not defend
+against DNS rebinding — out of scope for what this step asked for.
 
 ---
 

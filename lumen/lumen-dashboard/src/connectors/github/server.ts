@@ -1,6 +1,7 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cacheKey } from '@/lib/cache';
 import {
   mockActivity,
   mockContributions,
@@ -13,6 +14,7 @@ import type { ActivityData, ActivityEvent, ActivityKind, ContribDay, ContribData
 
 const ENV = ['GITHUB_TOKEN'];
 const API = 'https://api.github.com';
+const CACHE_TTL_SECONDS = 120;
 
 /* ---------- settings ---------- */
 
@@ -197,6 +199,7 @@ const connector: ConnectorServer = {
         () => liveActivity(username, limit),
         () => mockActivity(seedFor('github.activity', s), username, limit),
         'github.activity',
+        { key: cacheKey('github.activity', s), ttlSeconds: CACHE_TTL_SECONDS },
       );
     },
     'github.repos': (s) => {
@@ -208,6 +211,7 @@ const connector: ConnectorServer = {
         () => liveRepos(username, sort, limit),
         () => mockRepos(seedFor('github.repos', s), username, sort, limit),
         'github.repos',
+        { key: cacheKey('github.repos', s), ttlSeconds: CACHE_TTL_SECONDS },
       );
     },
     'github.contributions': (s) => {
@@ -217,6 +221,7 @@ const connector: ConnectorServer = {
         () => liveContributions(username),
         () => mockContributions(seedFor('github.contributions', s), username),
         'github.contributions',
+        { key: cacheKey('github.contributions', s), ttlSeconds: CACHE_TTL_SECONDS },
       );
     },
   },

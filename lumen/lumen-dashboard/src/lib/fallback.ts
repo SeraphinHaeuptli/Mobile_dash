@@ -1,21 +1,39 @@
 import 'server-only';
 import type { HandlerResult, WidgetMode } from './types';
+import { cacheGet, cacheSet } from './cache';
+
+export interface CacheOptions {
+  key: string;
+  ttlSeconds: number;
+}
 
 /**
  * Runs `live()` when credentials are present; on any failure (or when there
  * are no credentials at all) falls back to `mock()`. Unlike a bare try/catch,
  * a live failure is tagged 'stale' with the reason instead of looking exactly
  * like 'mock' — see PROJECT.md "Not done" / PLAN.md Phase 0.
+ *
+ * `cache`, when given, wraps only the `live()` call: a fresh cache hit skips
+ * the network entirely and returns mode 'live' (it is real data, just not
+ * re-fetched this call); a miss or expiry calls `live()` and caches success.
+ * A failure is never cached, so the next call retries live() rather than
+ * repeating a stale error for the full TTL.
  */
 export async function withFallback<T>(
   hasCreds: boolean,
   live: () => Promise<T>,
   mock: () => T,
   label: string,
+  cache?: CacheOptions,
 ): Promise<HandlerResult<T>> {
   if (!hasCreds) return { data: mock(), mode: 'mock' };
+  if (cache) {
+    const cached = cacheGet<T>(cache.key);
+    if (cached !== undefined) return { data: cached, mode: 'live' };
+  }
   try {
     const data = await live();
+    if (cache) cacheSet(cache.key, data, cache.ttlSeconds);
     return { data, mode: 'live' };
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);

@@ -40,8 +40,11 @@ src/lib/connectors.ts       CLIENT-SAFE ConnectorMeta[] (duplicated from server 
                             because server halves import node: builtins)
 src/lib/store.ts            read/writeConfig -> data/layout.json + DEFAULT_CONFIG
 src/lib/env.ts              hasEnv(keys)
-src/lib/fallback.ts         NEW (Phase 0): withFallback(), fromSample(), debugLog(),
+src/lib/fallback.ts         Phase 0: withFallback(), fromSample(), debugLog(),
                             debugFetch() — the one shared live/mock/stale helper.
+                            Phase 1 added withFallback's optional 5th `cache` arg.
+src/lib/cache.ts            Phase 1: in-memory TTL map. cacheKey(widgetId, settings),
+                            cacheGet(), cacheSet(). Module state, resets on restart.
 src/lib/mock.ts             seeded() pick() intBetween() walk() minutesFromNow()
 src/lib/useWidgetData.ts    client hook: POST /api/widget/<id>, auto-refresh, reload()
 
@@ -91,9 +94,18 @@ src/connectors/<id>/mock.ts     optional
   (weather/rss/system). `withFallback(hasCreds, live, mock, label)` takes that boolean
   explicitly per call — it does not read `isLive()` itself, so read it at the call site.
 - Mode semantics (`WidgetMode` in types.ts): `'mock'` = no credentials, sample by design.
-  `'live'` = the real call answered. `'stale'` = credentials/attempt present but the call
-  failed — sample data shown, `warning` explains why, UI shows an amber pill instead of the
-  neutral "sample" pill. `'stale'` must never render identically to `'mock'`.
+  `'live'` = the real call answered (or a fresh cache hit — still real data, just not
+  re-fetched). `'stale'` = credentials/attempt present but the call failed — sample data
+  shown, `warning` explains why, UI shows an amber pill instead of the neutral "sample"
+  pill. `'stale'` must never render identically to `'mock'`.
+- Caching (Phase 1) is the optional 5th arg of `withFallback(..., { key, ttlSeconds })`,
+  with `key` from `cacheKey(widgetId, settings)` so two instances of one widget with
+  different settings never collide. It wraps only the `live()` call. **Failures are never
+  cached** — a transient 500 must not pin a widget to sample data for a whole TTL. Current
+  TTLs: weather 600s, rss 300s, github 120s, stripe/gcal/gmail 60s, system uncached.
+- A bad *setting* (as opposed to a flaky upstream) should throw out of the handler so the
+  API returns `ok:false`, rather than going through `withFallback` and quietly serving
+  sample data. `rss.feed`'s `assertPublicFeedUrl()` is the reference example.
 - `system` connector is special: each reading (`OverviewData`, `DisksData`, `GpuData`,
   `ProcessesData`) already carries its own `sample: boolean` because failures are
   per-field, not per-call (readOverview() itself never throws). Its handlers call
@@ -132,8 +144,21 @@ confirms the fix end-to-end, not just in isolation. Screenshot taken during the 
 
 ## Not done
 Real credentials never exercised against any live API from a network that can actually
-reach them. No caching, no rate-limit handling, no OAuth refresh, no automated tests, no
-SSRF guard on the RSS feed URL. See PLAN.md.
+reach them. No rate-limit handling (GitHub ETag/conditional requests still to do), no OAuth
+refresh, no automated test suite, no Stripe cursor pagination. `system.gpu` never run
+against a real NVIDIA card. See PLAN.md.
+
+## Sandbox network limitation (matters for every future agent session)
+This container's egress goes through a proxy that allowlists almost nothing: `api.stripe.com`,
+`api.open-meteo.com`, `hnrss.org` and `example.com` all fail, and `api.github.com` answers
+only for endpoints scoped to this session's own repository (user-scoped paths like
+`/users/<u>/events`, which is what the github connector calls, return 403 with an explicit
+"sessions are bound to their configured repositories" message). **No connector has a
+reachable live-success path here.** Consequences: a `mode:"stale"` result in this sandbox is
+expected and is not evidence of a connector bug, and any acceptance test that needs a
+*successful* upstream response (cache-hit counting, field-mapping checks) cannot be run
+end-to-end and must either be verified at the logic level or deferred to a machine with
+real egress. Say which one you did — do not let a logic-level check pass as an end-to-end one.
 
 ## Known issue to flag to the human (not fixed automatically — out of PLAN.md's scope)
 `npm install` on 2026-08-26 reported **1 critical + 1 high** `npm audit` finding, both
@@ -209,3 +234,71 @@ no real credentials exist in this sandbox, so Phases 2–4's actual API-correctn
 (field mapping, pagination, OAuth) still needs a human with real keys and, ideally, network
 egress to the real hosts (this sandbox's proxy blocks stripe.com/open-meteo.com/etc., which
 is exactly why Phase 0's honest-failure behavior mattered for testing it at all).
+
+### 2026-08-26 (second session) — Phase 1 steps 1–2 (caching + RSS SSRF guard)
+Continued directly from the Phase 0 session above, same branch. Phase 1 step 3 (real GPU
+verification) is blocked on hardware and is the only thing left in the phase.
+
+**Step 1 — caching.** New `src/lib/cache.ts`: a module-level `Map` of
+`{value, expiresAt}`, with `cacheKey(widgetId, settings)` /  `cacheGet` / `cacheSet`.
+Module state, so it survives across requests in the one process and resets on restart —
+right for a single-process, no-DB dashboard.
+
+Rather than a separate wrapper, caching became an optional 5th argument on the existing
+`withFallback(hasCreds, live, mock, label, cache?)`, so every call site keeps one helper and
+the cache can only ever wrap the `live()` call. Two decisions worth keeping:
+- A cache hit returns `mode:'live'`, not a new mode. It *is* real data; it just wasn't
+  re-fetched this call. Inventing a 'cached' mode would have put a pill in front of the
+  user for something they don't need to act on.
+- **Failures are never cached.** Caching an error would pin a widget to sample data for the
+  full TTL after one transient 500; instead the next call retries live.
+
+TTLs applied per PLAN.md: weather 600s, rss 300s, github 120s, stripe/gcal/gmail 60s,
+system uncached (it reads local state; caching it would just make the CPU graph lie).
+
+**Step 2 — RSS SSRF guard.** `assertPublicFeedUrl()` in `src/connectors/rss/server.ts`
+rejects non-http(s) schemes, IP literals in private ranges, and hostnames that *resolve*
+into private ranges (0/8, 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, ::1, ::,
+IPv4-mapped IPv6). `net.isIP` + `dns.lookup({all:true})`; anything unparseable is treated
+as unsafe rather than allowed.
+
+Deliberately called in the handler *before* `withFallback`, not inside it. A blocked url is
+a bad setting, not a flaky upstream — it must surface as a real `ok:false` error the user
+can fix, and PLAN.md's acceptance criterion says "error state, not data". Routing it
+through `withFallback` would have served sample headlines for a blocked url, which is
+exactly the silent-substitution behaviour Phase 0 existed to remove. This is now written up
+as a general convention in "Conventions" above.
+
+Known limitation, also noted in a code comment: the DNS check does not pin the resolved
+address for the subsequent `fetch`, so this does not defend against DNS rebinding. Beyond
+what the step asked for; flagging it rather than implying the guard is airtight.
+
+Verification performed:
+1. `npx tsc --noEmit` and `npm run build` — both clean.
+2. SSRF guard, end-to-end over HTTP against a running server. All five return `ok:false`
+   with a specific reason and no feed data: `file:///etc/passwd` ("Unsupported feed
+   protocol"), `http://169.254.169.254/` (cloud metadata, "Feed host is a private
+   address"), `http://localhost:3000/` (caught via DNS: "resolves to a private address
+   (127.0.0.1)"), `http://127.0.0.1/feed`, `http://10.0.0.1/feed`.
+3. Caching — **verified at the logic level, not end-to-end.** PLAN.md's test ("hammer
+   weather.current 10× and count 1 upstream request") cannot run in this sandbox: every
+   upstream is unreachable (see "Sandbox network limitation" above), and since failures are
+   deliberately not cached, 10 calls correctly produced 10 upstream attempts — the right
+   behaviour, but not a test of the cache. Instead ran a throwaway harness (scratchpad, not
+   committed) that transpiles and imports the *real* `cache.ts` and `fallback.ts` and
+   stubs only `live()`. 11 assertions, all passing: 10 calls → exactly 1 upstream call, all
+   10 reporting `mode:'live'` with identical payloads; a different settings key gets its
+   own entry; TTL expiry re-fetches; a failure is not cached and the next call retries and
+   succeeds; `hasCreds:false` returns mock without calling live or touching the cache.
+   **The HTTP-level version of this test still needs running on a machine with real
+   egress** — flagged on the checkbox in PLAN.md too.
+4. Re-ran all 16 widget endpoints: identical to the Phase 0 results, no regression. The
+   default `rss.feed` url passes the new guard and reaches the network (its 403 is the
+   sandbox proxy, not the guard).
+5. Playwright full-page screenshot: renders correctly, zero console/page errors.
+
+Next session: Phase 1 is finished except the GPU check, which needs the human's machine.
+Phases 2–4 all start with a credential only a human can create. **Phase 6 (vitest test
+suite) needs no credentials and no network** — it is the obvious next agent-doable phase,
+and the throwaway cache harness written this session is a decent starting point for the
+`fallback.ts`/`cache.ts` unit tests.

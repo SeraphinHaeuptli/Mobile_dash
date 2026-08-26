@@ -1,5 +1,6 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cacheKey } from '@/lib/cache';
 import { seeded, intBetween, pick } from '@/lib/mock';
 
 /**
@@ -8,6 +9,7 @@ import { seeded, intBetween, pick } from '@/lib/mock';
  */
 const ENV: string[] = [];
 const API = 'https://api.open-meteo.com/v1/forecast';
+const CACHE_TTL_SECONDS = 600;
 
 /* ---------- shared shapes ---------- */
 
@@ -333,6 +335,7 @@ const connector: ConnectorServer = {
         () => liveCurrent(place),
         () => mockCurrent(seedFor('weather.current', s), place),
         'weather.current',
+        { key: cacheKey('weather.current', s), ttlSeconds: CACHE_TTL_SECONDS },
       );
     },
     'weather.forecast': (s) => {
@@ -343,6 +346,7 @@ const connector: ConnectorServer = {
         () => liveForecast(place, days),
         () => mockForecast(seedFor('weather.forecast', s), place, days),
         'weather.forecast',
+        { key: cacheKey('weather.forecast', s), ttlSeconds: CACHE_TTL_SECONDS },
       );
     },
   },
