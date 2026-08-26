@@ -56,7 +56,7 @@ implemented".
 
 ---
 
-## Phase 1 — keyless connectors first (~1h) — steps 1–2 DONE 2026-08-26, step 3 blocked
+## Phase 1 — keyless connectors first (~1h) — DONE 2026-08-26
 
 Weather, RSS and System already run live; harden them.
 
@@ -78,12 +78,28 @@ Weather, RSS and System already run live; harden them.
    → verified end-to-end over HTTP: both, plus `http://localhost:3000/`,
    `http://127.0.0.1/feed` and `http://10.0.0.1/feed`, return `ok:false` with a specific
    reason and no feed data.
-- [ ] 3. **System GPU.** Only path needing the target machine (Ryzen 5 / RTX 3070). Run
-   `system.gpu` there, confirm `nvidia-smi` parsing against real output, multi-GPU safe.
-   → verify: values match `nvidia-smi` run manually, within one refresh interval.
-   **BLOCKED — needs the human's actual machine.** No `nvidia-smi` and no NVIDIA device in
-   this container; `system.gpu` correctly reports `mode:"stale"` here. Everything else in
-   Phase 1 is done, so this single box is all that is left of the phase.
+- [x] 3. **System GPU.** ~~Only path needing the target machine (Ryzen 5 / RTX 3070). Run
+   `system.gpu` there, confirm `nvidia-smi` parsing against real output, multi-GPU safe.~~
+   **The premise was wrong.** The target machine is a Lenovo Yoga with **AMD** graphics —
+   there is no RTX 3070 and no NVIDIA hardware anywhere in this project. `nvidia-smi` does
+   not exist on that machine, so the old code threw and fell back to a sample that named a
+   specific NVIDIA card: the dashboard displayed hardware the owner does not have.
+
+   Rewritten rather than merely verified. `system.gpu` is now vendor-aware: NVIDIA via
+   `nvidia-smi` if present, otherwise AMD/Intel via DRM sysfs
+   (`/sys/class/drm/cardN/device/`), which is where the kernel actually publishes
+   utilisation, VRAM, temperature, power and fan duty. It also now distinguishes
+   **"no GPU"** (sysfs readable, nothing found → empty list, `sample:false`, widget says
+   "No GPU detected") from **"cannot tell"** (no sysfs at all — Windows/macOS → sample).
+   The sample no longer names a real product.
+   → verified: `parseDrmCard` + `readDrmGpus` unit-tested (18 cases incl. a fixture-built
+   fake sysfs tree covering an AMD APU, a discrete card with a fan, dual-GPU, display-only
+   and unreadable-sysfs), and end-to-end against a simulated AMD tree: `mode:"live"`,
+   `"AMD Radeon (amdgpu)"`, real VRAM/temp, `null` (rendered "—") for the power and fan an
+   APU does not expose.
+   → **still worth doing on the real machine when convenient:** run the dashboard on the
+   Yoga and confirm the numbers match `radeontop`/`amdgpu_top`. The read path is proven
+   against a synthetic tree, not against real amdgpu output.
 
 Implementation notes for future sessions: caching is not a separate wrapper — it is an
 optional 5th argument on `withFallback(hasCreds, live, mock, label, cache?)`, where `cache`

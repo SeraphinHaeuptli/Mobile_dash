@@ -27,7 +27,7 @@ cd lumen/lumen-dashboard
 npm install && npm run dev     # localhost:3000
 npm run build && npm run start
 npx tsc --noEmit               # passes clean
-npm test                       # vitest, 180 tests, no network needed
+npm test                       # vitest, 198 tests, no network needed
 npm run test:e2e               # playwright smoke flow; builds + serves on :3100
 ```
 `npm test` is unit + contract tests only. The e2e flow is separate on purpose: it needs a
@@ -100,7 +100,7 @@ e2e/flow.spec.ts            Phase 6 smoke flow: add → configure → drag → p
 | github | GITHUB_TOKEN | github.activity, github.repos, github.contributions | code written, untested |
 | weather | — | weather.current, weather.forecast | genuinely live (Open-Meteo, no key) |
 | rss | — | rss.feed | genuinely live; hand-written RSS/RDF/Atom parser, no deps |
-| system | — | system.overview, system.disks, system.gpu, system.processes | live via node:os + df/ps/nvidia-smi |
+| system | — | system.overview, system.disks, system.gpu, system.processes | live via node:os + df/ps; GPU via nvidia-smi **or** DRM sysfs (AMD/Intel) |
 
 ## Conventions (must hold for new code)
 - Widget id = `<connectorId>.<name>`. Handler keys in server.ts use the full widget id.
@@ -173,8 +173,9 @@ confirms the fix end-to-end, not just in isolation. Screenshot taken during the 
 ## Not done
 Real credentials never exercised against any live API from a network that can actually
 reach them. No rate-limit handling (GitHub ETag/conditional requests still to do), no OAuth
-refresh, no Stripe cursor pagination. `system.gpu` never run against a real NVIDIA card,
-so its `nvidia-smi` fixture is hand-written rather than captured. See PLAN.md.
+refresh, no Stripe cursor pagination. `system.gpu` has never been run against real GPU
+hardware of any vendor — the NVIDIA fixture is hand-written and the AMD/Intel sysfs path is
+tested against a synthetic directory tree, not a real amdgpu. See PLAN.md.
 
 Phases still open: 1 step 3 (GPU, needs hardware), 2 (Stripe), 3 (GitHub), 4 (Google
 OAuth), 5 (credentials UI, optional). Every one of 2–4 begins with a credential only a
@@ -500,3 +501,77 @@ Verification (this is the part the test suite made cheap):
 Nothing about the connector work (Phases 0/1) regressed. Still open and still needing a
 human: Phase 1 step 3 (NVIDIA hardware), Phases 2–4 (credentials). React 19 is now
 available as a separate, optional upgrade — it is no longer coupled to a security fix.
+
+### 2026-08-26 (fifth session) — system.gpu rewritten for AMD; a wrong premise corrected
+The human said: "i don't have nvidia hardware on this device, i'm on a lenovo yoga with
+amd." That single sentence invalidated a plan item and exposed a real bug.
+
+**The wrong premise.** PLAN.md Phase 1 step 3 described the target machine as
+"Ryzen 5 / RTX 3070" and asked only that `nvidia-smi` parsing be verified against real
+output. There is no RTX 3070 and no NVIDIA hardware anywhere in this project. Every
+previous session had faithfully treated that line as fact and recorded step 3 as "blocked
+on hardware" — when the correct response was that the step was aimed at the wrong target.
+Worth remembering: a plan written by someone else can be wrong about the world, and
+"blocked" is sometimes a sign the premise needs checking rather than that the work needs
+waiting.
+
+**The bug it was hiding.** `readGpu()` only ever ran `nvidia-smi`. On a machine without
+it, that threw, `safe()` fell back to `mockGpu()`, and the widget rendered
+**"NVIDIA GeForce RTX 3070"** with invented VRAM, temperature and wattage. The amber
+"stale" pill was shown, so the *mode* was honest, but the *content* asserted a specific
+false fact about the user's hardware. Phase 0 made failure visible; this was a case where
+visible-but-wrong content slipped through anyway, because the mock was written for a
+machine nobody has.
+
+**What was built.** `system.gpu` is now vendor-aware:
+1. `nvidia-smi` if it exists and reports cards (unchanged path, still tested).
+2. Otherwise DRM sysfs — `/sys/class/drm/cardN/device/` — where the kernel publishes
+   `gpu_busy_percent`, `mem_info_vram_used`/`_total`, and under `hwmon/hwmonN/`
+   `temp1_input` (millidegrees), `power1_average` or `power1_input` (microwatts), and
+   `pwm1`/`pwm1_max` (fan duty 0-255). This is the path that works on the Yoga.
+3. Three-way outcome instead of two, which is the important part:
+   - cards found → real data, `sample:false`, `mode:"live"`;
+   - **sysfs readable but no usable GPU → empty list, `sample:false`** → the widget's
+     existing "No GPU detected" empty state finally fires, instead of inventing a card;
+   - **sysfs absent entirely (Windows/macOS) → throw → sample**, because there we
+     genuinely cannot tell, and "no GPU" would be a different lie.
+
+Also: the mock is renamed to a neutral "Sample GPU" (it no longer claims a real product),
+the widget's empty state is no longer NVIDIA-specific, and the widget description says
+which vendors it reads.
+
+New code is split so it is testable without hardware: `parseDrmCard(files)` is pure
+(sysfs contents → `GpuItem | null`), and `readDrmGpus(root)` takes its root as a parameter
+so tests can point it at a fake tree.
+
+**A second bug, found by my own test while writing it:** `sysfsNumber` used
+`Number(raw.trim())`, and `Number('')` is `0`, not `NaN`. An empty or whitespace-only
+sysfs file — which does occur — would have been reported as a real reading of **0 W** or
+**0 °C** rather than "unknown". Now returns null for empty input.
+
+Verification:
+1. 18 new unit tests (198 total, up from 180). `parseDrmCard` covers a discrete AMD card
+   (all units converted: millidegrees→C, microwatts→W, pwm/pwm_max→%), an AMD APU with no
+   fan and no power sensor (must be `null`, never 0), Intel iGPU with no VRAM figure,
+   VRAM-but-no-utilisation, display-only nodes rejected, clamping, div-by-zero on
+   `pwm1_max=0`, unparseable contents, unknown vendor.
+2. `readDrmGpus` tested against a **fake sysfs tree built in a temp dir** — this covers
+   what the pure parser cannot: finding `cardN` while skipping `card0-eDP-1` connector
+   nodes, locating `hwmonN`, `power1_input` fallback, multi-GPU, and the crucial
+   `[]` vs `null` distinction.
+3. End-to-end against a simulated AMD APU tree (temporarily repointed `DRM_ROOT`, then
+   reverted): `mode:"live"`, `sample:false`, `"AMD Radeon (amdgpu)"`, VRAM 768/2048 MiB,
+   54 °C, `null` power and fan. Screenshotted the widget: no stale pill, no sample footer,
+   Power renders as "—" rather than a fake 0 W.
+4. Also confirmed the empty case end-to-end: a `simpledrm`-only tree yields `gpus: []`,
+   `sample:false` → "No GPU detected".
+5. `npx tsc --noEmit`, `npm run build`, `npm test` (198, and green inside `unshare -rn`),
+   `npm run test:e2e` (6) all clean.
+
+**Still honestly unverified:** no real GPU of any vendor has ever been read. The AMD path
+is proven against a synthetic tree that I built from the kernel's documented sysfs layout.
+Running it on the actual Yoga and comparing against `radeontop`/`amdgpu_top` is a five
+minute job and is the one thing that would close this properly. PLAN.md step 3 is checked
+because the work it should have asked for is done, with that caveat recorded inline.
+
+Open and needing a human: Phases 2–4 (credentials). Nothing else is agent-blocked.

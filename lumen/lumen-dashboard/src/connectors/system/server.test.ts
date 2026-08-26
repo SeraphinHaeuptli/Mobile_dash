@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { parseDf, parseNvidiaSmi, parsePs } from './server';
+import { parseDf, parseDrmCard, parseNvidiaSmi, parsePs, readDrmGpus } from './server';
 
 /**
  * Fixtures are local files, so this suite needs no network and no GPU.
@@ -197,5 +198,225 @@ describe('parseNvidiaSmi', () => {
   it('skips a line whose total memory is missing or zero', () => {
     expect(parseNvidiaSmi('Broken GPU, 10, 100, [N/A], 40, 50, 30')).toEqual([]);
     expect(parseNvidiaSmi('Broken GPU, 10, 100, 0, 40, 50, 30')).toEqual([]);
+  });
+});
+
+/* ---------- DRM sysfs (AMD / Intel GPUs) ---------- */
+
+describe('parseDrmCard', () => {
+  // Values as the kernel writes them: trailing newline, millidegrees,
+  // microwatts, bytes. A discrete AMD card exposes all of these.
+  const discreteAmd = {
+    vendor: '0x1002\n',
+    driver: 'amdgpu',
+    busy: '37\n',
+    vramUsed: '2415919104\n', // 2304 MiB
+    vramTotal: '8589934592\n', // 8192 MiB
+    temp: '58000\n', // 58.0 C
+    power: '94500000\n', // 94.5 W
+    pwm: '128\n',
+    pwmMax: '255\n',
+  };
+
+  it('reads a discrete AMD card and converts every unit', () => {
+    const gpu = parseDrmCard(discreteAmd)!;
+    expect(gpu).not.toBeNull();
+    expect(gpu.utilPct).toBe(37);
+    expect(gpu.memUsedMb).toBe(2304);
+    expect(gpu.memTotalMb).toBe(8192);
+    expect(gpu.tempC).toBe(58); // millidegrees -> C
+    expect(gpu.powerW).toBe(94.5); // microwatts -> W
+    expect(gpu.fanPct).toBe(50.2); // 128/255
+  });
+
+  it('names the card from the PCI vendor id and driver, without inventing a model', () => {
+    const gpu = parseDrmCard(discreteAmd)!;
+    expect(gpu.name).toContain('AMD');
+    expect(gpu.name).toContain('amdgpu');
+    // The whole point of this path: never claim a specific product.
+    expect(gpu.name).not.toMatch(/RTX|GeForce|\bRX\s?\d/);
+  });
+
+  it('handles an AMD APU (integrated) that reports no fan and no power', () => {
+    // A Lenovo-style AMD laptop: busy% and a VRAM carve-out, but hwmon has no
+    // pwm1 and no power1_average, so those files simply do not exist.
+    const gpu = parseDrmCard({
+      vendor: '0x1002\n',
+      driver: 'amdgpu',
+      busy: '12\n',
+      vramUsed: '536870912\n', // 512 MiB
+      vramTotal: '2147483648\n', // 2048 MiB
+      temp: '45000\n',
+    })!;
+    expect(gpu).not.toBeNull();
+    expect(gpu.utilPct).toBe(12);
+    expect(gpu.memTotalMb).toBe(2048);
+    expect(gpu.tempC).toBe(45);
+    // Missing must be null, never 0 — 0 W / 0% fan would be a false reading.
+    expect(gpu.powerW).toBeNull();
+    expect(gpu.fanPct).toBeNull();
+  });
+
+  it('accepts a card that reports utilisation but no VRAM figures', () => {
+    const gpu = parseDrmCard({ vendor: '0x8086\n', driver: 'i915', busy: '5\n' })!;
+    expect(gpu).not.toBeNull();
+    expect(gpu.utilPct).toBe(5);
+    expect(gpu.memTotalMb).toBe(0);
+    expect(gpu.name).toContain('Intel');
+  });
+
+  it('accepts a card that reports VRAM but no utilisation', () => {
+    const gpu = parseDrmCard({ vendor: '0x1002\n', vramTotal: '4294967296\n', vramUsed: '1073741824\n' })!;
+    expect(gpu).not.toBeNull();
+    expect(gpu.utilPct).toBe(0);
+    expect(gpu.memTotalMb).toBe(4096);
+    expect(gpu.memUsedMb).toBe(1024);
+  });
+
+  it('rejects a node with nothing measurable (display-only / no driver data)', () => {
+    expect(parseDrmCard({})).toBeNull();
+    expect(parseDrmCard({ vendor: '0x1002\n' })).toBeNull();
+    expect(parseDrmCard({ vendor: '0x1002\n', vramTotal: '0\n' })).toBeNull();
+    expect(parseDrmCard({ driver: 'simpledrm' })).toBeNull();
+  });
+
+  it('never reports more VRAM used than total', () => {
+    const gpu = parseDrmCard({ vendor: '0x1002\n', vramTotal: '1073741824\n', vramUsed: '99999999999\n' })!;
+    expect(gpu.memUsedMb).toBeLessThanOrEqual(gpu.memTotalMb);
+  });
+
+  it('clamps utilisation and fan duty into range', () => {
+    const gpu = parseDrmCard({ vendor: '0x1002\n', busy: '250\n', pwm: '999\n', pwmMax: '255\n' })!;
+    expect(gpu.utilPct).toBe(100);
+    expect(gpu.fanPct).toBe(100);
+  });
+
+  it('treats a zero or missing pwm1_max as "no fan reading" rather than dividing by zero', () => {
+    expect(parseDrmCard({ vendor: '0x1002\n', busy: '10\n', pwm: '128\n', pwmMax: '0\n' })!.fanPct).toBeNull();
+    expect(parseDrmCard({ vendor: '0x1002\n', busy: '10\n', pwm: '128\n' })!.fanPct).toBeNull();
+  });
+
+  it('ignores unparseable file contents instead of emitting NaN', () => {
+    const gpu = parseDrmCard({ vendor: '0x1002\n', busy: '10\n', temp: 'garbage\n', power: '\n' })!;
+    expect(gpu.tempC).toBeNull();
+    expect(gpu.powerW).toBeNull();
+    expect(Number.isNaN(gpu.utilPct)).toBe(false);
+  });
+
+  it('falls back to a neutral label for an unknown vendor', () => {
+    const gpu = parseDrmCard({ vendor: '0xdead\n', driver: 'nouveau', busy: '3\n' })!;
+    expect(gpu.name).toBe('GPU (nouveau)');
+  });
+
+  it('reads power1_input when power1_average is absent (handled by the caller)', () => {
+    // The reader passes whichever exists as `power`; parse must treat it the same.
+    expect(parseDrmCard({ vendor: '0x1002\n', busy: '1\n', power: '15000000\n' })!.powerW).toBe(15);
+  });
+});
+
+/* ---------- DRM sysfs enumeration (directory walking + file reads) ---------- */
+
+describe('readDrmGpus', () => {
+  /**
+   * Builds a fake /sys/class/drm tree in a temp dir. This exercises the parts
+   * parseDrmCard cannot: finding cardN dirs, skipping connector nodes,
+   * locating hwmonN, and tolerating absent files. Without real AMD hardware
+   * available, this is how the read path itself gets covered.
+   */
+  function makeTree(cards: Record<string, Record<string, string>>): string {
+    const root = mkdtempSync(path.join(tmpdir(), 'drm-'));
+    for (const [card, files] of Object.entries(cards)) {
+      const device = path.join(root, card, 'device');
+      mkdirSync(device, { recursive: true });
+      for (const [rel, contents] of Object.entries(files)) {
+        const target = path.join(device, rel);
+        mkdirSync(path.dirname(target), { recursive: true });
+        writeFileSync(target, contents);
+      }
+    }
+    return root;
+  }
+
+  it('reads an AMD laptop: one APU with hwmon temp but no fan or power', async () => {
+    const root = makeTree({
+      'card0': {
+        vendor: '0x1002\n',
+        uevent: 'DRIVER=amdgpu\nPCI_ID=1002:15BF\n',
+        gpu_busy_percent: '18\n',
+        mem_info_vram_used: '805306368\n', // 768 MiB
+        mem_info_vram_total: '2147483648\n', // 2048 MiB
+        'hwmon/hwmon3/temp1_input': '52000\n',
+      },
+      // Connector nodes live alongside the cards and must be ignored.
+      'card0-eDP-1': { vendor: 'ignored\n' },
+    });
+    const gpus = (await readDrmGpus(root))!;
+    expect(gpus).toHaveLength(1);
+    expect(gpus[0].name).toContain('AMD');
+    expect(gpus[0].utilPct).toBe(18);
+    expect(gpus[0].memUsedMb).toBe(768);
+    expect(gpus[0].memTotalMb).toBe(2048);
+    expect(gpus[0].tempC).toBe(52);
+    expect(gpus[0].powerW).toBeNull();
+    expect(gpus[0].fanPct).toBeNull();
+  });
+
+  it('falls back to power1_input when power1_average is absent', async () => {
+    const root = makeTree({
+      'card0': {
+        vendor: '0x1002\n',
+        uevent: 'DRIVER=amdgpu\n',
+        gpu_busy_percent: '40\n',
+        mem_info_vram_total: '8589934592\n',
+        'hwmon/hwmon0/power1_input': '75000000\n',
+      },
+    });
+    expect((await readDrmGpus(root))![0].powerW).toBe(75);
+  });
+
+  it('reads a discrete card with a fan', async () => {
+    const root = makeTree({
+      'card0': {
+        vendor: '0x1002\n',
+        uevent: 'DRIVER=amdgpu\n',
+        gpu_busy_percent: '65\n',
+        mem_info_vram_used: '4294967296\n',
+        mem_info_vram_total: '8589934592\n',
+        'hwmon/hwmon2/temp1_input': '71000\n',
+        'hwmon/hwmon2/power1_average': '180000000\n',
+        'hwmon/hwmon2/pwm1': '204\n',
+        'hwmon/hwmon2/pwm1_max': '255\n',
+      },
+    });
+    const gpu = (await readDrmGpus(root))![0];
+    expect(gpu.tempC).toBe(71);
+    expect(gpu.powerW).toBe(180);
+    expect(gpu.fanPct).toBe(80);
+  });
+
+  it('handles more than one card', async () => {
+    const root = makeTree({
+      'card0': { vendor: '0x8086\n', uevent: 'DRIVER=i915\n', gpu_busy_percent: '4\n' },
+      'card1': { vendor: '0x1002\n', uevent: 'DRIVER=amdgpu\n', gpu_busy_percent: '55\n', mem_info_vram_total: '8589934592\n' },
+    });
+    const gpus = (await readDrmGpus(root))!;
+    expect(gpus).toHaveLength(2);
+    expect(gpus[0].name).toContain('Intel');
+    expect(gpus[1].name).toContain('AMD');
+  });
+
+  it('returns an EMPTY LIST (a real finding) for a machine with no usable GPU', async () => {
+    // A display-only node with nothing measurable. This must be [] and not
+    // null: the widget should say "No GPU detected", not show a sample.
+    const root = makeTree({ 'card0': { uevent: 'DRIVER=simpledrm\n' } });
+    const gpus = await readDrmGpus(root);
+    expect(gpus).toEqual([]);
+    expect(gpus).not.toBeNull();
+  });
+
+  it('returns NULL ("cannot tell") when sysfs is not readable at all', async () => {
+    // Windows / macOS: no /sys. The caller must fall back to the sample rather
+    // than asserting the machine has no GPU.
+    expect(await readDrmGpus(path.join(tmpdir(), 'definitely-not-a-real-drm-root'))).toBeNull();
   });
 });

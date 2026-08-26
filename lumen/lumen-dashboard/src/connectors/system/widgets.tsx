@@ -216,7 +216,7 @@ function Disks({ data, settings }: WidgetProps<DisksData>) {
 
 function Gpu({ data }: WidgetProps<GpuData>) {
   const gpus = data && Array.isArray(data.gpus) ? data.gpus : [];
-  if (!gpus.length) return <Empty>No NVIDIA GPU detected.</Empty>;
+  if (!gpus.length) return <Empty>No GPU detected on this machine.</Empty>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, height: '100%' }}>
@@ -248,7 +248,7 @@ function Gpu({ data }: WidgetProps<GpuData>) {
           </div>
         );
       })}
-      <SampleHint show={data.sample} note="no nvidia-smi" />
+      <SampleHint show={data.sample} note="GPU not readable here" />
     </div>
   );
 }
@@ -336,7 +336,7 @@ const widgets: WidgetModule[] = [
       id: 'system.gpu',
       connectorId: 'system',
       title: 'GPU',
-      description: 'NVIDIA utilisation, VRAM, temperature and power draw via nvidia-smi.',
+      description: 'GPU utilisation, VRAM, temperature and power draw. NVIDIA via nvidia-smi, AMD/Intel via DRM sysfs.',
       defaultSize: { w: 4, h: 5 },
       minSize: { w: 3, h: 4 },
       refreshSeconds: 5,

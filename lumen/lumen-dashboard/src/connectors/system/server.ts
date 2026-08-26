@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
+import path from 'node:path';
 import os from 'node:os';
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { fromSample } from '@/lib/fallback';
@@ -307,11 +308,200 @@ export function parseNvidiaSmi(out: string): GpuItem[] {
   return gpus;
 }
 
+/* ---------- gpu: AMD / integrated, via DRM sysfs ----------
+ *
+ * Not every machine has an NVIDIA card, and `nvidia-smi` simply does not exist
+ * on the ones that do not. Before this, that threw and the widget fell back to
+ * a sample that names a specific NVIDIA card — i.e. an AMD laptop was shown
+ * hardware it does not have. On Linux the kernel exposes the real thing under
+ * /sys/class/drm/cardN/device/, so read that instead.
+ *
+ * Knobs used (amdgpu; all optional, absent on many APUs), relative to
+ * /sys/class/drm/cardN/device/ and its hwmon/hwmonN subdirectory:
+ *   gpu_busy_percent          utilisation, 0-100
+ *   mem_info_vram_used        bytes
+ *   mem_info_vram_total       bytes
+ *   hwmon temp1_input         millidegrees C
+ *   hwmon power1_average      microwatts (power1_input on some parts)
+ *   hwmon pwm1 + pwm1_max     fan duty, 0-255 (laptops often have neither)
+ */
+
+const DRM_ROOT = '/sys/class/drm';
+
+/** PCI vendor ids seen on the DRM bus. */
+const PCI_VENDORS: Record<string, string> = {
+  '0x1002': 'AMD',
+  '0x1022': 'AMD',
+  '0x8086': 'Intel',
+  '0x10de': 'NVIDIA',
+};
+
+/** Raw sysfs file contents for one card. Every field is optional. */
+export interface DrmCardFiles {
+  vendor?: string;
+  busy?: string;
+  vramUsed?: string;
+  vramTotal?: string;
+  temp?: string;
+  power?: string;
+  pwm?: string;
+  pwmMax?: string;
+  /** DRIVER=... line from the device uevent, e.g. 'amdgpu' */
+  driver?: string;
+}
+
+function sysfsNumber(raw: string | undefined): number | null {
+  if (raw == null) return null;
+  const v = raw.trim();
+  // Number('') is 0, not NaN — an empty or whitespace-only sysfs file would
+  // otherwise be reported as a real reading of zero (0 W, 0 °C).
+  if (v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * One card's sysfs contents -> a GpuItem, or null when the card exposes nothing
+ * worth showing (no utilisation and no VRAM figure — e.g. a display-only
+ * device, or a driver that publishes neither).
+ * Exported for unit tests.
+ */
+export function parseDrmCard(files: DrmCardFiles): GpuItem | null {
+  const vendorId = files.vendor?.trim().toLowerCase();
+  const vendor = vendorId ? PCI_VENDORS[vendorId] : undefined;
+  const driver = files.driver?.trim();
+
+  const busy = sysfsNumber(files.busy);
+  const vramTotalBytes = sysfsNumber(files.vramTotal);
+  const vramUsedBytes = sysfsNumber(files.vramUsed);
+
+  // Nothing measurable -> not a GPU worth a card in the UI.
+  if (busy == null && (vramTotalBytes == null || vramTotalBytes <= 0)) return null;
+
+  const memTotalMb = vramTotalBytes != null && vramTotalBytes > 0 ? Math.round(vramTotalBytes / 1024 / 1024) : 0;
+  const memUsedMb =
+    vramUsedBytes != null && vramUsedBytes >= 0 ? clamp(Math.round(vramUsedBytes / 1024 / 1024), 0, memTotalMb || Infinity) : 0;
+
+  const tempMilli = sysfsNumber(files.temp);
+  const powerMicro = sysfsNumber(files.power);
+  const pwm = sysfsNumber(files.pwm);
+  const pwmMax = sysfsNumber(files.pwmMax);
+
+  // hwmon reports millidegrees and microwatts; a driver that cannot measure
+  // omits the file entirely, which must stay null rather than becoming 0.
+  const tempC = tempMilli == null ? null : round1(tempMilli / 1000);
+  const powerW = powerMicro == null ? null : round1(powerMicro / 1e6);
+  const fanPct = pwm == null || pwmMax == null || pwmMax <= 0 ? null : clamp(round1((pwm / pwmMax) * 100), 0, 100);
+
+  // No product-name file exists in sysfs, so build the most honest label the
+  // kernel actually gives us instead of inventing a model number.
+  const name = vendor
+    ? `${vendor} ${vendor === 'AMD' ? 'Radeon' : 'Graphics'}${driver ? ` (${driver})` : ''}`
+    : driver
+      ? `GPU (${driver})`
+      : 'GPU';
+
+  return {
+    name,
+    utilPct: clamp(busy ?? 0, 0, 100),
+    memUsedMb,
+    memTotalMb,
+    tempC,
+    powerW,
+    fanPct,
+  };
+}
+
+async function readMaybe(file: string): Promise<string | undefined> {
+  try {
+    return await readFile(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
+
+/** First hwmon directory under a card's device dir, if the driver exposes one. */
+async function hwmonDir(deviceDir: string): Promise<string | null> {
+  try {
+    const base = path.join(deviceDir, 'hwmon');
+    const entries = await readdir(base);
+    return entries.length ? path.join(base, entries[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readDrmCard(cardDir: string): Promise<GpuItem | null> {
+  const device = path.join(cardDir, 'device');
+  const hwmon = await hwmonDir(device);
+  const [vendor, busy, vramUsed, vramTotal, uevent] = await Promise.all([
+    readMaybe(path.join(device, 'vendor')),
+    readMaybe(path.join(device, 'gpu_busy_percent')),
+    readMaybe(path.join(device, 'mem_info_vram_used')),
+    readMaybe(path.join(device, 'mem_info_vram_total')),
+    readMaybe(path.join(device, 'uevent')),
+  ]);
+  const [temp, powerAvg, powerInput, pwm, pwmMax] = hwmon
+    ? await Promise.all([
+        readMaybe(path.join(hwmon, 'temp1_input')),
+        readMaybe(path.join(hwmon, 'power1_average')),
+        readMaybe(path.join(hwmon, 'power1_input')),
+        readMaybe(path.join(hwmon, 'pwm1')),
+        readMaybe(path.join(hwmon, 'pwm1_max')),
+      ])
+    : [undefined, undefined, undefined, undefined, undefined];
+
+  const driver = /^DRIVER=(.+)$/m.exec(uevent ?? '')?.[1];
+  return parseDrmCard({ vendor, busy, vramUsed, vramTotal, temp, power: powerAvg ?? powerInput, pwm, pwmMax, driver });
+}
+
+/**
+ * Enumerate real GPUs from DRM sysfs. Returns null when sysfs itself is not
+ * readable (Windows, macOS, a locked-down container) — that is "cannot tell",
+ * which must not be reported as "no GPU".
+ *
+ * `root` is a parameter so tests can point it at a fake tree and exercise the
+ * directory walking and file reads, not just the pure parser. Production always
+ * uses DRM_ROOT.
+ */
+export async function readDrmGpus(root: string = DRM_ROOT): Promise<GpuItem[] | null> {
+  let entries: string[];
+  try {
+    entries = await readdir(root);
+  } catch {
+    return null;
+  }
+  // card0, card1 … but not the card0-DP-1 connector nodes.
+  const cards = entries.filter((e) => /^card\d+$/.test(e)).sort();
+  const found: GpuItem[] = [];
+  for (const card of cards) {
+    const item = await readDrmCard(path.join(root, card));
+    if (item) found.push(item);
+  }
+  return found;
+}
+
 async function readGpu(): Promise<GpuData> {
-  const out = await run('nvidia-smi', [`--query-gpu=${GPU_FIELDS}`, '--format=csv,noheader,nounits']);
-  const gpus = parseNvidiaSmi(out);
-  if (!gpus.length) throw new Error('nvidia-smi reported no GPUs');
-  return { gpus, sample: false };
+  // 1. NVIDIA, if the tool is there at all.
+  try {
+    const out = await run('nvidia-smi', [`--query-gpu=${GPU_FIELDS}`, '--format=csv,noheader,nounits']);
+    const gpus = parseNvidiaSmi(out);
+    if (gpus.length) return { gpus, sample: false };
+  } catch {
+    /* no nvidia-smi, or it failed — try the kernel next */
+  }
+
+  // 2. Whatever the kernel actually reports (AMD, Intel, or an NVIDIA card
+  //    whose userspace tool is not installed).
+  const drm = await readDrmGpus();
+
+  // 3. sysfs unreadable => we genuinely cannot tell. Let the caller fall back
+  //    to the sample rather than asserting this machine has no GPU.
+  if (drm == null) throw new Error('no nvidia-smi and no readable DRM sysfs on this platform');
+
+  // An empty list here is a real finding, not a failure: the widget says
+  // "No GPU detected" instead of inventing one.
+  return { gpus: drm, sample: false };
 }
 
 /* ---------- processes ---------- */

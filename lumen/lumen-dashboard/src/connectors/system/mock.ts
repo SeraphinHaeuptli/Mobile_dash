@@ -160,7 +160,15 @@ export function mockDisks(minSizeGb: number, limit: number): DisksData {
 
 /* ---------- mock: gpu ---------- */
 
-/** A single RTX 3070 (8 GB) under a light-to-moderate load. */
+/**
+ * A generic 8 GB discrete card under light-to-moderate load.
+ *
+ * Deliberately NOT named as a real product. This is only reached when the GPU
+ * genuinely cannot be read (no nvidia-smi *and* no DRM sysfs — i.e. Windows or
+ * macOS), and naming a specific model there told people they owned hardware
+ * they did not. A machine that can be read but has no GPU now returns an empty
+ * list and renders "No GPU detected" instead of this.
+ */
 export function mockGpu(seed: string): GpuData {
   const rnd = seeded(seed);
   const memTotalMb = 8192;
@@ -169,7 +177,7 @@ export function mockGpu(seed: string): GpuData {
   return {
     gpus: [
       {
-        name: 'NVIDIA GeForce RTX 3070',
+        name: 'Sample GPU',
         utilPct,
         memUsedMb,
         memTotalMb,
