@@ -1,4 +1,5 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
+import { debugFetch, withFallback } from '@/lib/fallback';
 import { seeded, intBetween, pick, minutesFromNow } from '@/lib/mock';
 
 /** No credentials needed — this connector just fetches and parses a feed URL. */
@@ -154,7 +155,7 @@ async function liveFeed(url: string, limit: number): Promise<FeedData> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch(parsed.toString(), {
+    const res = await debugFetch('rss', parsed.toString(), {
       headers: {
         Accept: 'application/rss+xml, application/atom+xml, application/xml, text/xml;q=0.9, */*;q=0.8',
         'User-Agent': 'lumen-dashboard',
@@ -236,14 +237,10 @@ const connector: ConnectorServer = {
   },
   isLive: () => true,
   handlers: {
-    'rss.feed': async (s) => {
+    'rss.feed': (s) => {
       const url = textSetting(s, 'url', 'https://hnrss.org/frontpage');
       const limit = numberSetting(s, 'limit', 8, 1, 40);
-      try {
-        return await liveFeed(url, limit);
-      } catch {
-        return mockFeed(seedFor('rss.feed', s), url, limit);
-      }
+      return withFallback(true, () => liveFeed(url, limit), () => mockFeed(seedFor('rss.feed', s), url, limit), 'rss.feed');
     },
   },
 };

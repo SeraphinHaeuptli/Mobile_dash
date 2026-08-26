@@ -54,7 +54,7 @@ function Feed({ data, settings, mode }: WidgetProps<FeedData>) {
       <div className="faint" style={{ fontSize: 11, marginTop: 'auto', display: 'flex', gap: 6, paddingTop: 6 }}>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{data.title}</span>
         <span style={{ flex: 1 }} />
-        {mode === 'mock' && <span>sample data</span>}
+        {mode !== 'live' && <span>sample data</span>}
       </div>
     </div>
   );

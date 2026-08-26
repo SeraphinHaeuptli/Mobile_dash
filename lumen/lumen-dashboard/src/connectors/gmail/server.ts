@@ -5,6 +5,7 @@
  */
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
+import { debugFetch, withFallback } from '@/lib/fallback';
 import { seeded, intBetween } from '@/lib/mock';
 
 const ENV = ['GMAIL_TOKEN'];
@@ -66,7 +67,7 @@ function parseFrom(raw: string): { name: string; email: string } {
 
 async function gmailGet(path: string): Promise<unknown> {
   const token = process.env.GMAIL_TOKEN ?? '';
-  const res = await fetch(`${API}/${path}`, {
+  const res = await debugFetch('gmail', `${API}/${path}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
     cache: 'no-store',
   });
@@ -287,14 +288,7 @@ const connector: ConnectorServer = {
   },
   isLive: () => hasEnv(ENV),
   handlers: {
-    'gmail.inbox': async (s) => {
-      if (!hasEnv(ENV)) return mockInbox(s);
-      try {
-        return await liveInbox(s);
-      } catch {
-        return mockInbox(s);
-      }
-    },
+    'gmail.inbox': (s) => withFallback(hasEnv(ENV), () => liveInbox(s), () => mockInbox(s), 'gmail.inbox'),
   },
 };
 
