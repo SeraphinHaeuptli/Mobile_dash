@@ -189,11 +189,17 @@ function isPrivateAddress(ip: string): boolean {
   return true; // not a recognisable literal -> treat as unsafe
 }
 
-/** Throws when `url` is not a fetchable public http(s) address. Never falls back to mock. */
-async function assertPublicFeedUrl(url: string): Promise<URL> {
+/**
+ * Throws when `url` is not a fetchable public http(s) address. Never falls back
+ * to mock. Exported for unit tests (PLAN.md Phase 6).
+ */
+export async function assertPublicFeedUrl(url: string): Promise<URL> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported feed protocol');
-  const hostname = parsed.hostname;
+  // URL.hostname keeps the brackets on an IPv6 literal ("[::1]"), which net.isIP
+  // does not recognise — without stripping them an IPv6 literal would skip the
+  // literal check entirely and fall through to the DNS branch.
+  const hostname = parsed.hostname.replace(/^\[(.+)\]$/, '$1');
   if (net.isIP(hostname)) {
     if (isPrivateAddress(hostname)) throw new Error(`Feed host is a private address (${hostname})`);
     return parsed;

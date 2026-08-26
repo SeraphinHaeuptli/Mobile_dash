@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Hacker News: Front Page</title>
+    <link>https://news.ycombinator.com/</link>
+    <description>Links for the intellectually curious.</description>
+    <item>
+      <title>Undervolting an RTX 3070 for a quiet homelab</title>
+      <link>https://level1techs.com/undervolt-3070</link>
+      <description>Nearly the same throughput at 60 watts less.</description>
+      <pubDate>Wed, 26 Aug 2026 10:05:00 GMT</pubDate>
+      <guid isPermaLink="false">hn:41230001</guid>
+    </item>
+    <item>
+      <title>Writing a tiny XML parser is easier than you think</title>
+      <link>https://example.org/tiny-xml</link>
+      <description><![CDATA[<p>Two regexes and a stack cover most real feeds.</p>]]></description>
+      <pubDate>Wed, 26 Aug 2026 07:40:00 GMT</pubDate>
+      <guid isPermaLink="false">hn:41230002</guid>
+    </item>
+  </channel>
+</rss>

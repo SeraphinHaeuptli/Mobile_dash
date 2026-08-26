@@ -27,7 +27,11 @@ cd lumen/lumen-dashboard
 npm install && npm run dev     # localhost:3000
 npm run build && npm run start
 npx tsc --noEmit               # passes clean
+npm test                       # vitest, 180 tests, no network needed
+npm run test:e2e               # playwright smoke flow; builds + serves on :3100
 ```
+`npm test` is unit + contract tests only. The e2e flow is separate on purpose: it needs a
+production build and a browser, so it must not block a quick `npm test`.
 
 ## File tree (source only, relative to lumen/lumen-dashboard/)
 ```
@@ -70,6 +74,21 @@ src/components/ui.tsx                Stat StatGrid Rows Row Pill Bar Sparkline E
 src/connectors/<id>/server.ts   default export ConnectorServer
 src/connectors/<id>/widgets.tsx default export WidgetModule[]  ('use client')
 src/connectors/<id>/mock.ts     optional
+src/connectors/<id>/server.test.ts    Phase 6 unit tests (rss, system, stripe)
+src/connectors/<id>/__fixtures__/     Phase 6 upstream fixtures; system's has a
+                                      README documenting captured vs hand-written
+
+src/lib/contract.test.ts    Phase 6: drives all 16 widget ids through the mock path
+                            and the live parse path (fetch stubbed from fixtures) and
+                            asserts identical key shapes.
+src/lib/fallback.test.ts    Phase 6: cache + withFallback + fromSample + debug logging.
+vitest.config.mts           aliases `server-only` to its no-op build and turns on JSX
+                            transform (tsconfig says jsx:"preserve" for Next).
+playwright.config.ts        e2e only; builds and serves the app on :3100 itself.
+e2e/flow.spec.ts            Phase 6 smoke flow: add → configure → drag → persist →
+                            reload → remove, plus regression guards for the two bugs
+                            found by hand (widget-body overflow, RGL swallowing
+                            header buttons).
 ```
 
 ## Connectors (7) and widgets (16)
@@ -115,6 +134,15 @@ src/connectors/<id>/mock.ts     optional
   that additionally logs one line (method, url, status, ms; **never** headers/body/secrets)
   when `DEBUG_CONNECTORS=1`.
 - Mocks are deterministic: `seeded(widgetId + settings + today)`.
+- **A new widget must be added to `SETTINGS` in `src/lib/contract.test.ts`**, and a new
+  connector needs a fixture under `src/connectors/<id>/__fixtures__/` plus a branch in
+  that file's `fixtureFor()`. The contract test fails loudly if you forget — that is
+  deliberate, it is what stops mock and live drifting apart.
+- Pure parsing helpers are exported purely so the tests can reach them (`parseDf`,
+  `parsePs`, `parseNvidiaSmi`, `parseFeed`, `decodeEntities`, `parsePaidCharges`,
+  `bucketByDay`, `assertPublicFeedUrl`). Keep them pure and injectable — `bucketByDay`
+  takes `now` as a parameter for exactly this reason. Do not make them read the clock,
+  the env, or the network directly.
 - Widget UI is built only from `@/components/ui` primitives + globals.css classes.
   No hardcoded colors except a connector's `meta.accent`; use `var(--text-dim)` etc.
 - No new npm dependencies without a reason; no `any` in exported signatures.
@@ -145,8 +173,12 @@ confirms the fix end-to-end, not just in isolation. Screenshot taken during the 
 ## Not done
 Real credentials never exercised against any live API from a network that can actually
 reach them. No rate-limit handling (GitHub ETag/conditional requests still to do), no OAuth
-refresh, no automated test suite, no Stripe cursor pagination. `system.gpu` never run
-against a real NVIDIA card. See PLAN.md.
+refresh, no Stripe cursor pagination. `system.gpu` never run against a real NVIDIA card,
+so its `nvidia-smi` fixture is hand-written rather than captured. See PLAN.md.
+
+Phases still open: 1 step 3 (GPU, needs hardware), 2 (Stripe), 3 (GitHub), 4 (Google
+OAuth), 5 (credentials UI, optional). Every one of 2–4 begins with a credential only a
+human can create. Phases 0, 1 (steps 1–2) and 6 are done.
 
 ## Sandbox network limitation (matters for every future agent session)
 This container's egress goes through a proxy that allowlists almost nothing: `api.stripe.com`,
@@ -302,3 +334,97 @@ Phases 2–4 all start with a credential only a human can create. **Phase 6 (vit
 suite) needs no credentials and no network** — it is the obvious next agent-doable phase,
 and the throwaway cache harness written this session is a decent starting point for the
 `fallback.ts`/`cache.ts` unit tests.
+
+### 2026-08-26 (third session) — Phase 6 (test suite)
+Picked Phase 6 because it was the only remaining phase needing neither credentials nor
+network. Same branch.
+
+**Runner.** `vitest` as a dev dependency. Deliberately took `vitest@4` rather than the v2
+that matched the era of the rest of the deps: v2 pulls a vulnerable `esbuild`/`vite` chain
+and would have added 5 advisories to a repo whose only outstanding ones are the two Next
+ones already flagged. With v4 `npm audit` still reports exactly those two and nothing new.
+
+`vitest.config.mts` (`.mts`, not `.ts`, so vite loads it as ESM without warning) does two
+non-obvious things: aliases `server-only` to the package's own `empty.js` (it throws by
+design outside a React Server Component, and the tests import those modules deliberately),
+and enables the JSX transform via `oxc.jsx` — the project tsconfig sets `jsx:"preserve"`
+for Next, which vite cannot parse, and `contract.test.ts` imports `registry.client.ts`
+which pulls in every `widgets.tsx`. Note vite 7 uses oxc, so the older `esbuild: { jsx }`
+option is silently ignored — it must be `oxc: { jsx: { runtime: 'automatic' } }`.
+
+**Step 1 — unit tests.** 29 for the RSS parser (RSS 2.0 / RDF / Atom / CDATA / named,
+decimal and hex entities / astral-plane codepoints / out-of-range refs / junk input /
+truncation), 33 for the system parsers, 21 for Stripe, 25 for cache+fallback.
+
+Several helpers had to be exported to be reachable: `parseDf`, `parsePs`,
+`parseNvidiaSmi`, `parsePaidCharges`, `assertPublicFeedUrl`. The Stripe day-bucketing was
+inline in `liveRevenue`, so it was extracted to a pure `bucketByDay(charges, days, now)`
+— `now` is a parameter specifically so the tests are not tied to the wall clock, which is
+what makes the month-boundary and leap-day cases possible.
+
+**A real bug fell out of writing these.** `assertPublicFeedUrl` (the Phase 1 SSRF guard)
+did not block `http://[::1]/feed`: `URL.hostname` keeps the brackets on an IPv6 literal,
+`net.isIP('[::1]')` returns 0, so it skipped the literal check and fell through to the DNS
+branch. It happened to still fail here with ENOTFOUND, which is why the manual Phase 1
+check passed — but on a host that resolves it, an IPv6 loopback would have been fetched.
+Fixed by stripping the brackets before `net.isIP`. This is the case for automated tests
+over one-off manual curls: the manual check and the test agreed on the outcome and
+disagreed on the reason.
+
+**Step 2 — contract tests.** `src/lib/contract.test.ts` runs every one of the 16 widget
+ids twice: once with no credentials (mock path, with `fetch` replaced by something that
+throws, so a stray request is loud) and once with credentials set and `fetch` served from
+local fixtures. Both results are reduced to a recursive *key* shape — values and types
+discarded, arrays collapsed to their first element — and compared. Keys, not types, is
+what PLAN.md asks for and is also what is right: `description: string | null` legitimately
+differs per side.
+
+Two things that keep it from passing vacuously, both of which I checked: the live path must
+report `mode:'live'` (a fixture that failed to parse would fall back to the mock and make
+the comparison self-satisfying), and settings are chosen so both sides return non-empty
+collections. I verified the test actually bites by injecting an extra key into gcal's live
+path — `gcal.agenda` and `gcal.next` both failed, then passed again on revert.
+
+The rss contract case uses `http://203.0.113.10/frontpage` — an IP literal from TEST-NET-3
+rather than a hostname, because the SSRF guard resolves hostnames via DNS and this suite
+must run with no network at all. An IP literal takes the guard's literal branch.
+
+**Step 3 — e2e.** `e2e/flow.spec.ts` + `playwright.config.ts`, run by `npm run test:e2e`,
+excluded from `npm test` (it needs a build and a browser). Six tests: the full
+add → configure → drag → persist → reload → remove flow, plus a console-error guard, a
+no-error-state check, a settings round-trip, and regression guards for both bugs found by
+hand earlier (widget body overflowing its card; RGL swallowing header buttons — the test
+clicks the gear inside `.widget-actions`, so a regression in `draggableCancel` fails it).
+
+Pinned `@playwright/test` to 1.56.1 to match the browser build preinstalled in this image;
+the latest wanted a build that is not present and cannot be downloaded here.
+
+Two bugs in my own first draft of this spec, both worth recording because they are the
+kind that make a suite look green while testing nothing:
+- Waiting on `.skeleton` count 0 as "loaded" is wrong — the grid is `ssr:false`, so before
+  it mounts there are zero widgets *and* zero skeletons, and the assertion passed instantly
+  against an empty page, measuring 0 widgets. Now `waitForDashboard()` waits for the
+  widgets to exist *first*, then for skeletons to clear.
+- The drag step asserted nothing had to move. A newly added widget is placed at the bottom
+  (`addWidget` uses `maxY`), so dragging it further down is a no-op. It now drags upward
+  and asserts the persisted `y` actually decreased.
+
+Also learned from the app while writing it: `addWidget` calls `setEditing(true)`, so the
+toolbar is already in edit mode after adding — the test asserts that rather than clicking
+"Arrange" again.
+
+Verification performed:
+1. `npx tsc --noEmit` — clean. `npm run build` — clean.
+2. `npm test` — 180 tests, 5 files, green.
+3. **The no-network claim actually verified, not assumed**: `unshare -rn npm test` (a
+   network namespace with no interfaces and no DNS) — all 180 still pass.
+4. `npm run test:e2e` — 6 Playwright tests green against a real production build.
+5. Mutation-checked the contract test (injected key → 2 failures → reverted → green).
+
+Next session: nothing left that an agent can do unattended. Phase 1 step 3 needs an NVIDIA
+machine; Phases 2, 3 and 4 each begin with a credential a human must create (Stripe
+restricted key / GitHub fine-grained PAT / Google OAuth client). Phase 5 is optional and
+only worth doing if editing `.env.local` proves annoying. The honest next move is to hand
+back to the human for credentials — or, if something agent-doable is wanted, the Next.js
+14 → 16 upgrade flagged above is real work, but it is breaking and should be a deliberate
+decision rather than something a scheduled session starts on its own.

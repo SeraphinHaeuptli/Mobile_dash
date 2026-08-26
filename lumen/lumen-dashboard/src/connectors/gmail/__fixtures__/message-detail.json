@@ -1,0 +1,15 @@
+{
+  "id": "msg_0001",
+  "threadId": "thr_0001",
+  "labelIds": ["UNREAD", "INBOX", "CATEGORY_PERSONAL"],
+  "snippet": "Guten Tag, der Samstag um 14 Uhr passt uns sehr gut.",
+  "internalDate": "1787000000000",
+  "payload": {
+    "mimeType": "multipart/alternative",
+    "headers": [
+      { "name": "From", "value": "\"Familie Brunner\" <m.brunner@example.ch>" },
+      { "name": "Subject", "value": "Re: Termin Taufe-Shooting" },
+      { "name": "Date", "value": "Tue, 25 Aug 2026 09:30:00 +0200" }
+    ]
+  }
+}

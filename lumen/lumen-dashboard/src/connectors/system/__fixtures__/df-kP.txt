@@ -1,0 +1,6 @@
+Filesystem     1024-blocks    Used Available Capacity Mounted on
+tmpfs             16461084       0  16461084       0% /dev/shm
+/dev/vda         264212084 8250276  30598248      22% /
+/dev/vde            269516  239996     24112      91% /opt/claude-code
+/dev/vdf             46900   30076     15868      66% /opt/env-runner
+tmpfs              8230540       0   8230540       0% /sys/fs/cgroup

@@ -1,0 +1,12 @@
+Filesystem     1024-blocks      Used Available Capacity Mounted on
+/dev/nvme0n1p2   488384000 307521024 156020736      67% /
+/dev/sda1       1953514584 801234560 1053107224      44% /mnt/my data
+my server:/vol   500000000 250000000 250000000      50% /net/shared drive
+/dev/nvme0n1p2   488384000 307521024 156020736      67% /
+tmpfs             16461084         0  16461084       0% /dev/shm
+devtmpfs           8230540         0   8230540       0% /dev
+udev               8230540         0   8230540       0% /run/udev
+none               1048576    524288    524288      50% /snap/core
+/dev/nvme0n1p1     1046512    321084       -512      99% /boot
+overlay          264212084   8250276  30598248      22% /var/lib/docker/overlay2/abc
+/dev/sdb1               50        50         0     100% /tiny

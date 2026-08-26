@@ -1,0 +1,30 @@
+{
+  "data": {
+    "user": {
+      "contributionsCollection": {
+        "contributionCalendar": {
+          "weeks": [
+            { "contributionDays": [
+              { "date": "2026-06-07", "contributionCount": 0 },
+              { "date": "2026-06-08", "contributionCount": 4 },
+              { "date": "2026-06-09", "contributionCount": 11 },
+              { "date": "2026-06-10", "contributionCount": 2 },
+              { "date": "2026-06-11", "contributionCount": 0 },
+              { "date": "2026-06-12", "contributionCount": 7 },
+              { "date": "2026-06-13", "contributionCount": 1 }
+            ] },
+            { "contributionDays": [
+              { "date": "2026-06-14", "contributionCount": 3 },
+              { "date": "2026-06-15", "contributionCount": 0 },
+              { "date": "2026-06-16", "contributionCount": 9 },
+              { "date": "2026-06-17", "contributionCount": 5 },
+              { "date": "2026-06-18", "contributionCount": 6 },
+              { "date": "2026-06-19", "contributionCount": 0 },
+              { "date": "2026-06-20", "contributionCount": 2 }
+            ] }
+          ]
+        }
+      }
+    }
+  }
+}

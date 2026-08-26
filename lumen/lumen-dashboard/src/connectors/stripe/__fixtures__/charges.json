@@ -1,0 +1,44 @@
+{
+  "object": "list",
+  "has_more": false,
+  "url": "/v1/charges",
+  "data": [
+    {
+      "id": "ch_3PabcdefGHIJ0001",
+      "object": "charge",
+      "amount": 32000,
+      "currency": "chf",
+      "created": 1787000000,
+      "paid": true,
+      "status": "succeeded",
+      "description": "Taufe-Shooting Telli",
+      "receipt_email": "m.brunner@example.ch",
+      "customer": "cus_ABC123",
+      "billing_details": { "name": "Familie Brunner", "email": "m.brunner@example.ch" }
+    },
+    {
+      "id": "ch_3PabcdefGHIJ0002",
+      "object": "charge",
+      "amount": 14500,
+      "currency": "chf",
+      "created": 1786900000,
+      "paid": true,
+      "status": "succeeded",
+      "description": null,
+      "receipt_email": null,
+      "customer": null,
+      "billing_details": { "name": "Nadia Keller", "email": null }
+    },
+    {
+      "id": "ch_3PabcdefGHIJ0003",
+      "object": "charge",
+      "amount": 9900,
+      "currency": "chf",
+      "created": 1786800000,
+      "paid": false,
+      "status": "failed",
+      "description": "Bewerbungsfotos",
+      "billing_details": { "name": "Lea Frei", "email": "lea@example.com" }
+    }
+  ]
+}

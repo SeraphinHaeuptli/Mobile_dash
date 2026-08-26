@@ -1,0 +1,20 @@
+{
+  "latitude": 47.39,
+  "longitude": 8.04,
+  "timezone": "Europe/Zurich",
+  "current_units": { "temperature_2m": "°C", "wind_speed_10m": "km/h" },
+  "current": {
+    "time": "2026-08-26T11:00",
+    "temperature_2m": 23.4,
+    "apparent_temperature": 24.1,
+    "relative_humidity_2m": 62,
+    "wind_speed_10m": 11.2,
+    "weather_code": 80,
+    "is_day": 1
+  },
+  "hourly_units": { "temperature_2m": "°C" },
+  "hourly": {
+    "time": ["2026-08-26T09:00", "2026-08-26T10:00", "2026-08-26T11:00", "2026-08-26T12:00", "2026-08-26T13:00"],
+    "temperature_2m": [20.1, 21.8, 23.4, 24.6, 25.2]
+  }
+}

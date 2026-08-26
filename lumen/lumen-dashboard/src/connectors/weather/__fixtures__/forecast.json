@@ -1,0 +1,13 @@
+{
+  "latitude": 47.39,
+  "longitude": 8.04,
+  "timezone": "Europe/Zurich",
+  "daily_units": { "temperature_2m_max": "°C" },
+  "daily": {
+    "time": ["2026-08-26", "2026-08-27", "2026-08-28", "2026-08-29", "2026-08-30"],
+    "weather_code": [80, 3, 0, 61, 95],
+    "temperature_2m_max": [25.2, 22.8, 26.4, 19.7, 21.1],
+    "temperature_2m_min": [14.3, 13.9, 15.1, 12.4, 13.0],
+    "precipitation_probability_max": [55, 20, 5, 80, 70]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "object": "balance",
+  "livemode": false,
+  "available": [
+    { "currency": "chf", "amount": 374542, "source_types": { "card": 374542 } },
+    { "currency": "eur", "amount": 50239, "source_types": { "card": 50239 } }
+  ],
+  "pending": [
+    { "currency": "chf", "amount": 63697, "source_types": { "card": 63697 } },
+    { "currency": "eur", "amount": 23648, "source_types": { "card": 23648 } }
+  ]
+}

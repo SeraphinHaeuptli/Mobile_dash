@@ -175,22 +175,31 @@ browser — return `configured: true` and a masked suffix only.
    `.env.local`.
 - [ ] 3. GET never returns raw secret values, only `configured` + masked suffix.
 
-## Phase 6 — tests (~2h)
+## Phase 6 — tests (~2h) — DONE 2026-08-26
 
 No test runner yet. Add `vitest` (dev dep only).
 
-- [ ] 1. Unit: RSS parser (RSS 2.0, RDF, Atom, CDATA, entities, malformed input);
+- [x] 1. Unit: RSS parser (RSS 2.0, RDF, Atom, CDATA, entities, malformed input);
   `df`/`ps`/`nvidia-smi` parsers against captured fixture output; Stripe day-bucketing.
-- [ ] 2. Contract: for every widget id, assert mock and live parse paths produce the same
+  → `src/connectors/{rss,system,stripe}/server.test.ts` (+ `src/lib/fallback.test.ts`
+  for cache/fallback, promoted from Phase 1's throwaway harness).
+- [x] 2. Contract: for every widget id, assert mock and live parse paths produce the same
   keys — a fixture per connector under `src/connectors/<id>/__fixtures__/`.
-- [ ] 3. Smoke: keep the existing Playwright flow (add → configure → drag → persist →
+  → `src/lib/contract.test.ts`, driving all 16 widget ids through both paths.
+- [x] 3. Smoke: keep the existing Playwright flow (add → configure → drag → persist →
   reload → remove) as `e2e/flow.spec.ts`.
 
 → verify: `npm test` green with no network access, since every fixture is local.
+  → **verified**: 180 tests pass inside `unshare -rn` (a network namespace with no
+  interfaces and no DNS), not merely on a machine that happened not to need the network.
+  `npm run test:e2e` (6 Playwright tests) passes separately; it needs a built app and a
+  browser, so it is deliberately not part of `npm test`.
 
-This phase does not depend on real credentials and can be picked up by an agent session
-with no human involvement — good candidate for a future iteration if Phases 2–4 are
-blocked waiting on a human.
+**Caveat that keeps Phase 1 step 3 open:** `__fixtures__/nvidia-smi.txt` is hand-written
+from the documented `--format=csv,noheader,nounits` shape, NOT captured from a real GPU
+(there is none in this container). The parser is tested against the documented format;
+it is still unverified against real hardware. `df-kP.txt` and `ps-comm.txt` *are* real
+captures. See `src/connectors/system/__fixtures__/README.md`.
 
 ---
 

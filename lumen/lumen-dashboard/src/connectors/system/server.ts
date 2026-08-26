@@ -228,7 +228,8 @@ function isPseudo(fs: string, mount: string) {
  * 1024-byte blocks. Device and mount point may both contain spaces, so anchor
  * the four numeric columns instead of splitting on whitespace.
  */
-function parseDf(out: string): DiskItem[] {
+/** Exported for unit tests (PLAN.md Phase 6). */
+export function parseDf(out: string): DiskItem[] {
   const rows: DiskItem[] = [];
   const seen = new Set<string>();
   for (const line of lines(out)) {
@@ -284,7 +285,8 @@ function gpuNumber(raw: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseNvidiaSmi(out: string): GpuItem[] {
+/** Exported for unit tests (PLAN.md Phase 6). */
+export function parseNvidiaSmi(out: string): GpuItem[] {
   const gpus: GpuItem[] = [];
   for (const line of lines(out)) {
     const cells = line.split(',').map((c) => c.trim());
@@ -314,7 +316,8 @@ async function readGpu(): Promise<GpuData> {
 
 /* ---------- processes ---------- */
 
-function parsePs(out: string): ProcItem[] {
+/** Exported for unit tests (PLAN.md Phase 6). */
+export function parsePs(out: string): ProcItem[] {
   const rows: ProcItem[] = [];
   for (const line of lines(out)) {
     if (/^COMMAND\b/i.test(line)) continue;

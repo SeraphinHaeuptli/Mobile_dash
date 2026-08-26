@@ -130,14 +130,17 @@ async function liveBalance(settings: WidgetSettings): Promise<StripeBalanceData>
   };
 }
 
-interface ParsedCharge {
+export interface ParsedCharge {
   amount: number;
   currency: string;
   created: number; // unix seconds
 }
 
-/** Successful, settled charges only — that is what "gross volume" counts. */
-function parsePaidCharges(body: unknown): ParsedCharge[] {
+/**
+ * Successful, settled charges only — that is what "gross volume" counts.
+ * Exported for unit tests (PLAN.md Phase 6).
+ */
+export function parsePaidCharges(body: unknown): ParsedCharge[] {
   const out: ParsedCharge[] = [];
   if (!isRec(body)) return out;
   for (const item of asArr(body.data)) {
@@ -150,6 +153,23 @@ function parsePaidCharges(body: unknown): ParsedCharge[] {
     });
   }
   return out;
+}
+
+/**
+ * Charges -> one bucket per local calendar day, oldest first, zero-filled so the
+ * sparkline has a point for every day in the window even when nothing was paid.
+ * Charges outside the window are ignored rather than folded into an edge bucket.
+ * `now` is injectable so tests are not tied to the wall clock.
+ * Exported for unit tests (PLAN.md Phase 6).
+ */
+export function bucketByDay(charges: ParsedCharge[], days: number, now: number = Date.now()): StripeRevenuePoint[] {
+  const buckets = new Map<string, number>();
+  for (let i = days - 1; i >= 0; i--) buckets.set(dayKey(new Date(now - i * DAY_MS)), 0);
+  for (const c of charges) {
+    const key = dayKey(new Date(c.created * 1000));
+    if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + c.amount);
+  }
+  return [...buckets.entries()].map(([date, amount]) => ({ date, amount }));
 }
 
 /** GET /v1/charges for the window and the one before it, then bucket by day. */
@@ -168,13 +188,6 @@ async function liveRevenue(settings: WidgetSettings): Promise<StripeRevenueData>
   const current = parsePaidCharges(currentBody);
   const previous = parsePaidCharges(previousBody);
 
-  const buckets = new Map<string, number>();
-  for (let i = days - 1; i >= 0; i--) buckets.set(dayKey(new Date(Date.now() - i * DAY_MS)), 0);
-  for (const c of current) {
-    const key = dayKey(new Date(c.created * 1000));
-    if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + c.amount);
-  }
-
   const total = current.reduce((sum, c) => sum + c.amount, 0);
   const previousTotal = previous.reduce((sum, c) => sum + c.amount, 0);
   return {
@@ -184,7 +197,7 @@ async function liveRevenue(settings: WidgetSettings): Promise<StripeRevenueData>
     previousTotal,
     changePct: previousTotal > 0 ? ((total - previousTotal) / previousTotal) * 100 : null,
     count: current.length,
-    series: [...buckets.entries()].map(([date, amount]) => ({ date, amount })),
+    series: bucketByDay(current, days),
   };
 }
 
