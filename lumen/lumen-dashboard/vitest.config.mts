@@ -15,10 +15,14 @@ export default defineConfig({
       'server-only': path.resolve(root, 'node_modules/server-only/empty.js'),
     },
   },
-  // The project's tsconfig sets jsx:"preserve" for Next to handle; vite cannot
-  // parse that, and the contract test imports registry.client.ts, which pulls in
-  // every widgets.tsx. Transform JSX here instead. No component is rendered —
-  // the tests only read each widget's `def` — so the runtime never needs React.
+  // contract.test.ts imports registry.client.ts, which pulls in every
+  // widgets.tsx, so the test transform has to handle JSX. Set explicitly rather
+  // than inherited from tsconfig: Next 16 rewrote tsconfig's `jsx` to
+  // "react-jsx", but it was "preserve" before and Next manages that field, so
+  // pinning it here keeps the tests independent of what Next decides next.
+  // Note vite 7+ uses oxc — an `esbuild: { jsx }` block is silently ignored.
+  // No component is rendered (the tests only read each widget's `def`), so the
+  // runtime never actually needs React.
   oxc: { jsx: { runtime: 'automatic' } },
   test: {
     environment: 'node',

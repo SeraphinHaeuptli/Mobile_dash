@@ -17,7 +17,7 @@ from the git-tracked `lumen/lumen-dashboard/` (present only in the tar.gz) and w
 in the 2026-08-26 session below.
 
 ## What it is
-Local-first personal dashboard. Next.js 14 App Router · React 18 · TypeScript strict ·
+Local-first personal dashboard. Next.js 16 App Router · React 18 · TypeScript strict ·
 react-grid-layout. No DB, no auth, no telemetry. One process + one JSON file.
 Runs on mock data out of the box; connectors go live when env keys are present.
 
@@ -82,8 +82,8 @@ src/lib/contract.test.ts    Phase 6: drives all 16 widget ids through the mock p
                             and the live parse path (fetch stubbed from fixtures) and
                             asserts identical key shapes.
 src/lib/fallback.test.ts    Phase 6: cache + withFallback + fromSample + debug logging.
-vitest.config.mts           aliases `server-only` to its no-op build and turns on JSX
-                            transform (tsconfig says jsx:"preserve" for Next).
+vitest.config.mts           aliases `server-only` to its no-op build and sets the JSX
+                            transform explicitly (vite 7+ uses oxc, not esbuild).
 playwright.config.ts        e2e only; builds and serves the app on :3100 itself.
 e2e/flow.spec.ts            Phase 6 smoke flow: add → configure → drag → persist →
                             reload → remove, plus regression guards for the two bugs
@@ -192,14 +192,33 @@ expected and is not evidence of a connector bug, and any acceptance test that ne
 end-to-end and must either be verified at the logic level or deferred to a machine with
 real egress. Say which one you did — do not let a logic-level check pass as an end-to-end one.
 
-## Known issue to flag to the human (not fixed automatically — out of PLAN.md's scope)
-`npm install` on 2026-08-26 reported **1 critical + 1 high** `npm audit` finding, both
-against `next@14.2.15` (and its `postcss` dependency) — a long list of DoS/SSRF/cache-
-poisoning CVEs, patched in Next 16.x. The only fix path (`npm audit fix --force`) is a
-**major version bump (14 → 16.3.3)**, which likely requires React 19 and touches App
-Router internals — a breaking, hard-to-reverse change well beyond a "harden the connectors"
-task. Left alone deliberately this session; a human should decide whether/when to take the
-Next.js major upgrade as its own piece of work.
+## Next.js version (was a flagged security issue — RESOLVED 2026-08-26)
+The repo ran `next@14.2.15`, which carried **1 critical + 1 high** `npm audit` finding (a
+long list of DoS/SSRF/cache-poisoning CVEs, plus a vulnerable `postcss`). Upgraded to
+**Next 16.3.3** at the human's instruction; `npm audit` now reports **0 vulnerabilities**.
+
+Two things worth knowing before touching this again:
+- **React stayed on 18.3.1.** Next 16's peer range is `^18.2.0 || ^19.0.0`, so the CVE fix
+  did not require a React major as well. That was deliberate — it kept the blast radius to
+  one framework instead of two. React 19 remains available later as its own decision.
+- **`react-grid-layout` stayed on 1.4.4.** A 2.x exists but is a rewrite with a different
+  entry-point/type layout; it is not the vulnerable package and 1.4.4 is fine on React 18,
+  so it was left alone.
+
+Consequences of Next 16 that are now baked in:
+- Route handlers receive `params` as a **Promise** (`src/app/api/widget/[id]/route.ts`
+  awaits it). Same for any future dynamic route, and for `cookies()`/`headers()` if ever
+  used.
+- Next rewrote `tsconfig.json` on first build: `jsx` is now `react-jsx` (was `preserve`)
+  and `.next/dev/types/**/*.ts` was added to `include`. It also rewrote `next-env.d.ts` to
+  import generated types from `.next/`. Both files say "do not edit" and are Next-managed.
+  Verified that `npx tsc --noEmit` and `npm test` are both still clean on a checkout with
+  **no** `.next/` present, so a fresh clone is not broken by this.
+- `next lint` no longer exists in 16 (it now parses `lint` as a directory name). The
+  `lint` npm script was removed rather than replaced — it had never worked in this repo
+  anyway, it only ever dropped into ESLint's interactive setup prompt, and there is still
+  no ESLint config here. Adding one is a separate decision, not part of a security fix.
+- The build now runs on Turbopack by default.
 
 ## Session log (append-only, newest last)
 
@@ -428,3 +447,56 @@ only worth doing if editing `.env.local` proves annoying. The honest next move i
 back to the human for credentials — or, if something agent-doable is wanted, the Next.js
 14 → 16 upgrade flagged above is real work, but it is breaking and should be a deliberate
 decision rather than something a scheduled session starts on its own.
+
+### 2026-08-26 (fourth session) — Next.js 14 → 16 security upgrade
+The human answered the standing question from the Phase 0 session ("fix it"), so the
+Next.js major upgrade was taken as its own piece of work. This is the change the Phase 6
+test suite existed to make safe, and it is worth recording that it paid for itself
+immediately: the upgrade was verifiable in minutes rather than by hand-clicking the UI.
+
+**Scope kept deliberately narrow.** Only `next` moved (14.2.15 → 16.3.3). React stayed at
+18.3.1 because Next 16's peer range is `^18.2.0 || ^19.0.0` — the CVEs are in Next, not
+React, so pulling React 19 in at the same time would have doubled the blast radius for no
+security benefit. `react-grid-layout` stayed at 1.4.4 for the same reason (a 2.x exists,
+but it is a rewrite, and 1.4.4 is not the vulnerable package and works on React 18).
+`npm audit`: 2 vulnerabilities (1 critical, 1 high) → **0**.
+
+**Breaking changes hit, and how they were handled:**
+1. `params` in route handlers is a Promise in Next 15+. `src/app/api/widget/[id]/route.ts`
+   now awaits it. This was the only dynamic route in the repo, and the only source change
+   the whole upgrade required — the typecheck found it, nothing was discovered at runtime.
+2. Next rewrote `tsconfig.json` on first build (`jsx: "preserve"` → `"react-jsx"`, plus
+   `.next/dev/types/**/*.ts` in `include`) and rewrote `next-env.d.ts` to import generated
+   types out of `.next/`. Both are Next-managed "do not edit" files, so the rewrites were
+   accepted rather than reverted. Because `.next/` is gitignored, I explicitly checked the
+   fresh-clone case — moved `.next/` away and re-ran `npx tsc --noEmit` and `npm test`,
+   both clean — so a new checkout is not broken before its first build.
+3. `next lint` is gone in 16 (it now parses `lint` as a directory argument and errors).
+   The `lint` script was **removed, not replaced**. It had never worked in this repo — it
+   only ever dropped into ESLint's interactive setup prompt, which is why it was killed
+   rather than run back in the Phase 0 session — and there is still no ESLint config.
+   Adding one is a real decision, not something to smuggle into a security fix.
+4. Builds now use Turbopack by default. No config change needed.
+
+`vitest.config.mts`'s JSX comment was updated: it used to say "tsconfig sets preserve",
+which Next has now changed. The explicit `oxc.jsx` setting is kept precisely so the test
+transform does not depend on whatever Next decides that field should be next.
+
+Verification (this is the part the test suite made cheap):
+1. `npx tsc --noEmit` clean; `npm run build` clean on Turbopack.
+2. `npm test` — 180 tests green, and green again inside `unshare -rn` (no interfaces, no
+   DNS), so the no-network property survived the upgrade.
+3. `npm run test:e2e` — all 6 Playwright tests green against a real Next 16 production
+   build, including the drag → persist → reload path, which is the one most likely to
+   break on a framework major and the one least likely to be caught by unit tests.
+4. Ran the server and re-curled **all 16 widget endpoints**: byte-for-byte the same
+   modes and warnings as before the upgrade. Re-checked all four SSRF vectors (still
+   `ok:false` with specific reasons) and confirmed failures are still not cached (5 calls
+   to a failing upstream produced 5 attempts, as designed).
+5. Confirmed `npm run dev` serves too — a different code path from `next start`, and the
+   one a human will actually use day to day.
+6. Full-page screenshot: visually identical to the Next 14 build, zero console errors.
+
+Nothing about the connector work (Phases 0/1) regressed. Still open and still needing a
+human: Phase 1 step 3 (NVIDIA hardware), Phases 2–4 (credentials). React 19 is now
+available as a separate, optional upgrade — it is no longer coupled to a security fix.
