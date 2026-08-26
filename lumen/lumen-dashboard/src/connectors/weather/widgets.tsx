@@ -111,7 +111,7 @@ function Current({ data, mode }: WidgetProps<CurrentData>) {
       )}
 
       <div className="faint" style={{ fontSize: 11, marginTop: 'auto', textAlign: 'right' }}>
-        {mode === 'mock' ? 'sample data' : 'Open-Meteo'}
+        {mode !== 'live' ? 'sample data' : 'Open-Meteo'}
       </div>
     </div>
   );
@@ -160,7 +160,7 @@ function Forecast({ data, mode }: WidgetProps<ForecastData>) {
           {data.label} · {data.tempUnit}
         </span>
         <span style={{ flex: 1 }} />
-        {mode === 'mock' && <span>sample data</span>}
+        {mode !== 'live' && <span>sample data</span>}
       </div>
     </div>
   );

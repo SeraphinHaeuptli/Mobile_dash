@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import type { WidgetModule, WidgetProps } from '@/lib/types';
+import type { WidgetMode, WidgetModule, WidgetProps } from '@/lib/types';
 import { Stat, Rows, Row, Pill, Empty, clockTime } from '@/components/ui';
 
 /* ---------- shapes returned by ./server.ts ---------- */
@@ -23,7 +23,7 @@ interface NextEventData {
   event: CalEvent | null;
 }
 
-function SampleHint({ mode }: { mode: 'mock' | 'live' }) {
+function SampleHint({ mode }: { mode: WidgetMode }) {
   if (mode === 'live') return <></>;
   return (
     <div className="faint" style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '.07em', marginTop: 10 }}>

@@ -1,5 +1,5 @@
 import 'server-only';
-import type { ConnectorServer, Json, WidgetSettings } from './types';
+import type { ConnectorServer, HandlerResult, Json, WidgetSettings } from './types';
 
 import stripe from '@/connectors/stripe/server';
 import gcal from '@/connectors/gcal/server';
@@ -21,9 +21,8 @@ export function resolveWidget(widgetId: string) {
   return { connector, handler };
 }
 
-export async function runWidget(widgetId: string, settings: WidgetSettings): Promise<{ data: Json; mode: 'mock' | 'live' }> {
+export async function runWidget(widgetId: string, settings: WidgetSettings): Promise<HandlerResult<Json>> {
   const found = resolveWidget(widgetId);
   if (!found) throw new Error(`Unknown widget: ${widgetId}`);
-  const data = await found.handler(settings);
-  return { data, mode: found.connector.isLive() ? 'live' : 'mock' };
+  return found.handler(settings);
 }

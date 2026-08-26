@@ -13,8 +13,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     settings = {};
   }
   try {
-    const { data, mode } = await runWidget(params.id, settings ?? {});
-    return NextResponse.json<WidgetResponse>({ ok: true, data, mode, fetchedAt });
+    const { data, mode, warning } = await runWidget(params.id, settings ?? {});
+    return NextResponse.json<WidgetResponse>({ ok: true, data, mode, warning, fetchedAt });
   } catch (e) {
     const error = e instanceof Error ? e.message : 'unknown error';
     return NextResponse.json<WidgetResponse>({ ok: false, error, mode: 'mock', fetchedAt }, { status: 200 });
