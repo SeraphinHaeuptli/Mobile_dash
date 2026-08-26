@@ -21,9 +21,11 @@ export function resolveWidget(widgetId: string) {
   return { connector, handler };
 }
 
-export async function runWidget(widgetId: string, settings: WidgetSettings): Promise<{ data: Json; mode: 'mock' | 'live' }> {
+export async function runWidget(
+  widgetId: string,
+  settings: WidgetSettings,
+): Promise<{ data: Json; mode: 'mock' | 'live' | 'stale'; warning?: string }> {
   const found = resolveWidget(widgetId);
   if (!found) throw new Error(`Unknown widget: ${widgetId}`);
-  const data = await found.handler(settings);
-  return { data, mode: found.connector.isLive() ? 'live' : 'mock' };
+  return found.handler(settings);
 }

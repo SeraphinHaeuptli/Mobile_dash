@@ -34,13 +34,23 @@ export interface ConnectorMeta {
   docsUrl?: string;
 }
 
+/** What a connector handler resolves to: the data plus how it was obtained. */
+export interface WidgetResult<T = Json> {
+  data: T;
+  /** 'live' = fetched now, 'mock' = no credentials configured, 'stale' = live call
+   *  failed and this is mock data standing in — see `warning` for why. */
+  mode: 'live' | 'mock' | 'stale';
+  /** set only when mode is 'stale'; the reason the live call failed, e.g. 'Stripe 401' */
+  warning?: string;
+}
+
 /** Server-side half of a connector: turns (widgetId, settings) into data. */
 export interface ConnectorServer {
   meta: ConnectorMeta;
   /** true when every env key is present -> live data, otherwise mock data */
   isLive(): boolean;
   /** keyed by widget id, e.g. 'stripe.balance' */
-  handlers: Record<string, (settings: WidgetSettings) => Promise<Json>>;
+  handlers: Record<string, (settings: WidgetSettings) => Promise<WidgetResult>>;
 }
 
 export interface WidgetDef {
@@ -75,7 +85,9 @@ export interface WidgetResponse {
   ok: boolean;
   data?: Json;
   error?: string;
-  mode: 'mock' | 'live';
+  mode: 'mock' | 'live' | 'stale';
+  /** set only when mode is 'stale'; the reason the live call failed */
+  warning?: string;
   fetchedAt: string;
 }
 
