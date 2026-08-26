@@ -1,0 +1,19 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+tsconfig.tsbuildinfo
+next-env.d.ts
+
+# production
+/build
+
+# local env / data
+.env*.local
+data/
+
+# misc
+.DS_Store
+*.log

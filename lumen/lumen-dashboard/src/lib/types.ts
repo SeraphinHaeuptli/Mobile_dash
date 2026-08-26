@@ -57,11 +57,18 @@ export interface WidgetDef {
 }
 
 /** Props every widget component receives. */
+/**
+ * 'mock'  - no credentials configured, sample data is expected.
+ * 'live'  - the live call succeeded.
+ * 'stale' - credentials are configured but the live call failed; the mock
+ *           data is shown in its place so it is never mistaken for real data.
+ */
+export type WidgetMode = 'mock' | 'live' | 'stale';
+
 export interface WidgetProps<T = Json> {
   data: T;
   settings: WidgetSettings;
-  /** 'mock' when the connector has no credentials configured */
-  mode: 'mock' | 'live';
+  mode: WidgetMode;
 }
 
 /** Client-side half of a widget: the definition plus its React component. */
@@ -75,7 +82,9 @@ export interface WidgetResponse {
   ok: boolean;
   data?: Json;
   error?: string;
-  mode: 'mock' | 'live';
+  mode: WidgetMode;
+  /** set when mode is 'stale': why the live call failed */
+  warning?: string;
   fetchedAt: string;
 }
 

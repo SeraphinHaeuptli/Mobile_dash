@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import os from 'node:os';
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
+import { withFallback } from '@/lib/fallback';
 import {
   bucketSeed,
   clamp,
@@ -63,15 +64,6 @@ function run(cmd: string, args: string[], timeoutMs = 4000): Promise<string> {
 
 function lines(out: string) {
   return out.split('\n').map((l) => l.trim()).filter((l) => l !== '');
-}
-
-/** Always return a payload: any failure in the live read falls back to the sample. */
-async function safe<T>(live: () => Promise<T>, fallback: () => T): Promise<T> {
-  try {
-    return await live();
-  } catch {
-    return fallback();
-  }
 }
 
 /* ---------- CPU sampling (module state, survives between requests) ---------- */
@@ -362,26 +354,36 @@ const connector: ConnectorServer = {
   // No credentials to configure — the host is always readable, at worst partially.
   isLive: () => true,
   handlers: {
-    'system.overview': async () =>
-      safe<OverviewData>(readOverview, () => mockOverview(bucketSeed('system.overview', 5), HISTORY_MAX)),
+    'system.overview': () =>
+      withFallback<OverviewData>(
+        true,
+        readOverview,
+        () => mockOverview(bucketSeed('system.overview', 5), HISTORY_MAX),
+        'system.overview',
+      ),
 
-    'system.disks': async (s) => {
+    'system.disks': (s) => {
       const minSizeGb = decimal(s, 'minSizeGb', 1, 0, 4096);
       const limit = count(s, 'limit', 6, 1, 30);
-      return safe<DisksData>(
+      return withFallback<DisksData>(
+        true,
         () => readDisks(minSizeGb, limit),
         () => mockDisks(minSizeGb, limit),
+        'system.disks',
       );
     },
 
-    'system.gpu': async () => safe<GpuData>(readGpu, () => mockGpu(bucketSeed('system.gpu', 15))),
+    'system.gpu': () =>
+      withFallback<GpuData>(true, readGpu, () => mockGpu(bucketSeed('system.gpu', 15)), 'system.gpu'),
 
-    'system.processes': async (s) => {
+    'system.processes': (s) => {
       const limit = count(s, 'limit', 6, 1, 30);
       const sortBy = choice(s, 'sortBy', ['cpu', 'memory'] as const, 'cpu');
-      return safe<ProcessesData>(
+      return withFallback<ProcessesData>(
+        true,
         () => readProcesses(limit, sortBy),
         () => mockProcesses(limit, sortBy),
+        'system.processes',
       );
     },
   },

@@ -1,35 +1,72 @@
 # PLAN.md — implementing the connectors for real
 
+**This file is machine-readable state for an AI agent.** It is a working checklist, not
+prose for a human reader — keep entries terse, keep checkboxes accurate, and update the
+matching section of PROJECT.md ("Verified" / "Not done" / "Connectors" table) every time
+a checkbox here flips. Read PROJECT.md first for the contract and file map.
+
 Goal: move every connector from "live code written, never exercised" to "verified against
 the real API, with correct auth, caching, and honest error states".
-Read PROJECT.md first for the contract and file map.
 
 Ordering is deliberate: Phase 0 is a prerequisite for honestly testing anything else,
 then connectors go easiest-credential-first so each phase ends with something working.
 
 ---
 
-## Phase 0 — make failure visible (blocking, ~1h)
+## Phase 0 — make failure visible (blocking, ~1h) — ✅ DONE (2026-08-26)
 
 Today every live call silently falls back to mock on error. While implementing real
 connectors this hides exactly the failures you need to see (401, 403, rate limit, bad
 field mapping). Fix before touching any API.
 
-1. `src/lib/types.ts`: widen mode to `'mock' | 'live' | 'stale'` and add
-   `warning?: string` to `WidgetResponse`.
+1. [x] `src/lib/types.ts`: widen mode to `'mock' | 'live' | 'stale'` (exported as
+   `WidgetMode`) and add `warning?: string` to `WidgetResponse`.
    → verify: `npx tsc --noEmit` fails only where the new state must be handled.
-2. Connector handlers: on a live failure return the mock **plus** the reason, e.g.
+   **Result: clean before this change already had few call sites; all consumers
+   (SampleHint components in gcal/gmail/stripe/github widgets.tsx, and mode-equality
+   checks in github/weather/rss widgets.tsx) were updated in the same pass, so
+   `npx tsc --noEmit` exits 0.**
+2. [x] Connector handlers: on a live failure return the mock **plus** the reason, e.g.
    `{ ...mock, _fallback: 'HTTP 401 from /v1/balance' }`. Introduce one shared helper
    `withFallback(live, mock, label)` in `src/lib/fallback.ts` and use it everywhere —
    the seven copies of this try/catch are the only duplicated logic in the repo.
    → verify: grep shows no bare `catch { return mock }` left in `src/connectors`.
-3. `WidgetShell.tsx`: `stale` renders the data plus an amber header pill whose tooltip is
+   **Result: all 7 connectors (stripe, gcal, gmail, github, weather, rss, system) now
+   call `withFallback(isLive, live, mock, label)` from `src/lib/fallback.ts`. The local
+   `resolve`/`safe` helpers that used to live in each server.ts are deleted.
+   `registry.server.ts::runWidget` strips the hidden `_fallback` key back out and turns
+   it into `{ mode: 'stale', warning }`.**
+3. [x] `WidgetShell.tsx`: `stale` renders the data plus an amber header pill whose tooltip is
    the reason. `mock` keeps the neutral "sample" pill.
    → verify: temporarily set `STRIPE_SECRET_KEY=sk_test_bogus`; stripe widgets show an
    amber pill saying 401, not a silent "sample".
-4. Add `DEBUG_CONNECTORS=1` env: when set, log every outbound request (method, url,
+   **Result: uses the existing `.pill.warn` CSS class (already theme-aware via
+   `var(--warn)`, no new CSS needed). Verified live in a browser (Playwright screenshot):
+   with a bogus Stripe key, `stripe.balance` returned
+   `{"mode":"stale","warning":"Stripe 403 on /balance"}` and rendered an amber "stale"
+   pill with that string as the tooltip; gcal/gmail (no env keys set at all) correctly
+   stayed on the neutral "sample" pill since `isLive()` is false and the live path is
+   never attempted for them. Zero console errors.**
+4. [x] Add `DEBUG_CONNECTORS=1` env: when set, log every outbound request (method, url,
    status, ms) to the server console, never the key.
    → verify: one line per widget fetch, secrets absent from output.
+   **Result: `src/lib/debugFetch.ts` wraps every connector's raw `fetch()` call (stripe,
+   gcal, gmail, github, weather, rss — system has no network calls, only
+   `execFile`/`readFile`). Logs `[connectors] METHOD url -> status (Nms)`; only method,
+   url, status and duration are logged, never headers/body, so bearer tokens (sent via
+   the `Authorization` header, never in the URL for any of these 7 connectors) never
+   reach the log. Verified in dev.log.**
+
+**Note for the next iteration on Phase 1+:** this sandbox's outbound network egress goes
+through a proxy that returns HTTP 403 for third-party hosts (Open-Meteo, Stripe, GitHub,
+hnrss.org were all tested and all 403'd, even with no auth involved for Open-Meteo/RSS).
+That means genuine live-data verification (Phase 1 item 3, Phase 2 "numbers equal the
+Stripe dashboard", Phase 3 GitHub mapping, etc.) **cannot be completed inside this
+sandboxed session** — only on a machine with real outbound internet and real credentials.
+Phase 0's own verification does not need real network access (it only needs a live
+attempt to fail, which the sandbox's 403 already does for free), so Phase 0 is genuinely
+complete. Phases 1+ that require comparing live output to a real API's ground truth
+should be flagged back to the human owner rather than half-verified here.
 
 ---
 
