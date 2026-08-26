@@ -88,3 +88,14 @@ without overflow:auto), and header buttons swallowed by the RGL drag handle.
 ## Not done
 Real credentials never exercised against any live API. No caching, no rate-limit handling,
 no OAuth refresh, no tests, no error state distinct from mock. See PLAN.md.
+
+## Repo layout
+The Next.js app lives at the **repo root** (package.json, src/, tsconfig.json etc. are
+top-level) — it was previously nested under `lumen/lumen-dashboard/` plus a stale
+`lumen-dashboard.tar.gz` backup; both were removed 2026-08-26 so `npm install`/`npm run dev`
+work straight from a fresh clone with no `cd`. `./run.sh` is a one-command dev launcher:
+installs deps only if `node_modules` is missing, copies `.env.example` to `.env.local` on
+first run, then runs `npm run dev`. `.gitignore`, `.env.example`, and `data/.gitkeep` are
+now tracked at root (they existed only inside the old tarball before). Verified after the
+move: `npm install`, `npx tsc --noEmit` clean, `npm run dev` serves `200` on `/` (title
+"Lumen Dashboard") and `/api/connectors`.
