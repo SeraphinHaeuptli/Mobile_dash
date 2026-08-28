@@ -60,16 +60,21 @@ implemented".
 
 Weather, RSS and System already run live; harden them.
 
-- [ ] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
+- [x] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
    `widgetId + JSON.stringify(settings)`. Wrap live calls. TTLs: weather 600s, rss 300s,
    github 120s, stripe 60s, gcal/gmail 60s; system not cached.
    → verify: hammer `/api/widget/weather.current` 10× and count 1 upstream request in
-   DEBUG_CONNECTORS output.
-- [ ] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
+   DEBUG_CONNECTORS output. — VERIFIED 2026-08-28: 1 `GET .../v1/forecast` line then 9
+   `cache: hit weather.current:{}` lines.
+- [x] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
    reject hosts resolving to private ranges (127/8, 10/8, 172.16/12, 192.168/16,
    169.254/16, ::1).
    → verify: `url=file:///etc/passwd` and `url=http://169.254.169.254/` both return an
-   error state, not data.
+   error state, not data. — VERIFIED 2026-08-28: both return `mode:"stale"` with a warning
+   (`Unsupported feed protocol: file:` / `Feed URL resolves to a private or local address`)
+   and sample items, never the raw target content; `http://localhost:3000/` also blocked;
+   a real external host (`hnrss.org`) still passes the guard and only fails later at the
+   sandbox's proxy (403), confirming no false positive.
 - [ ] 3. **System GPU.** Only path needing the target machine (Ryzen 5 / RTX 3070). Run
    `system.gpu` there, confirm `nvidia-smi` parsing against real output, multi-GPU safe.
    → verify: values match `nvidia-smi` run manually, within one refresh interval.

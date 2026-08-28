@@ -209,3 +209,72 @@ no real credentials exist in this sandbox, so Phases 2–4's actual API-correctn
 (field mapping, pagination, OAuth) still needs a human with real keys and, ideally, network
 egress to the real hosts (this sandbox's proxy blocks stripe.com/open-meteo.com/etc., which
 is exactly why Phase 0's honest-failure behavior mattered for testing it at all).
+
+### 2026-08-28 — Phase 1.1 and 1.2 implemented (caching + RSS SSRF guard)
+Scheduled/autonomous session. `npm install` had not been run yet in this checkout (fresh
+sandbox) — ran it first; still the same pre-existing `npm audit`: 1 critical + 1 high on
+`next@14.2.15`, unchanged, not acted on (see "Known issue to flag to the human" above).
+
+Implemented PLAN.md Phase 1 items 1–2:
+- New `src/lib/cache.ts`: `withCache(key, ttlSeconds, fn)` — a single process-wide
+  in-memory `Map` keyed by whatever the caller passes, TTL per entry, no eviction beyond
+  overwrite-on-expiry (fine at this scale: at most ~16 widget×settings keys ever live).
+  `cacheTtlFor(connectorId)` holds the PLAN.md TTL table (weather 600s, rss 300s, github
+  120s, stripe 60s, gcal/gmail 60s; connectors absent from the table — `system` — get 0,
+  meaning never cached).
+- Wired in at a single choke point instead of touching all 7 connectors: `runWidget()` in
+  `src/lib/registry.server.ts` now wraps the whole `handler(settings)` call in
+  `withCache(widgetId + JSON.stringify(settings), cacheTtlFor(connector.meta.id), …)`. This
+  caches the resolved `HandlerResult` (data + mode + warning together), not just the raw
+  live payload — a cache hit during a `stale` window keeps returning that same `stale`
+  result until the TTL expires rather than re-attempting and re-logging every request,
+  which is the intended behavior (it still bounds request volume, which is the point).
+  Cache hits get one `debugLog('cache', 'hit <key>')` line under `DEBUG_CONNECTORS=1` for
+  the same reason live requests are logged — visibility.
+- New `src/lib/ssrf.ts`: `assertPublicHttpUrl(rawUrl)` — parses the URL, rejects anything
+  but `http:`/`https:`, then resolves the hostname (`node:dns/promises` `lookup(host, {all:
+  true})`, or treats a literal IP as its own single address) and rejects if *any* resolved
+  address falls in 0.0.0.0/8, 10/8, 127/8, 169.254/16, 172.16/12, 192.168/16 (IPv4) or
+  `::1`/`::`/`fe80::/10`/`fc00::/7` or an IPv4-mapped `::ffff:x.x.x.x` form of the above
+  (IPv6). An address family tsc/node doesn't recognize as v4 or v6 is treated as private
+  (refuse rather than risk it). This is single-lookup-at-fetch-time, not a rebinding-proof
+  guard (the actual `fetch()` in `liveFeed` re-resolves independently) — acceptable for a
+  single-user local dashboard; noted here in case a future session wants to harden further
+  (e.g. resolve once and pass the IP to `fetch` with a `Host` header).
+- `src/connectors/rss/server.ts` `liveFeed()`: replaced the old scheme-only check
+  (`new URL(url); if (protocol !== http/https) throw`) with `await
+  assertPublicHttpUrl(url)`, which does both the scheme check and the new private-range
+  check before any fetch happens.
+
+Verification performed (all in `lumen/lumen-dashboard/`, fresh `npm install` first):
+1. `npx tsc --noEmit` — clean.
+2. `npm run build` — clean, all routes compile.
+3. `DEBUG_CONNECTORS=1 npm run start`, curled `/api/widget/weather.current` 10× back to
+   back: log shows exactly one `GET https://api.open-meteo.com/...` line (403 — proxy
+   again, expected, see "Standing caution" in PLAN.md) followed by nine
+   `[connectors] cache: hit weather.current:{}` lines — PLAN.md's exact acceptance test for
+   Phase 1.1.
+4. RSS SSRF guard, all against the running server:
+   - `url=file:///etc/passwd` -> `mode:"stale"`, `warning:"rss.feed: Unsupported feed
+     protocol: file:"`, sample items only (not file contents) — PLAN.md's exact test.
+   - `url=http://169.254.169.254/` -> `mode:"stale"`, `warning:"rss.feed: Feed URL
+     resolves to a private or local address"` — PLAN.md's exact test (cloud metadata IP).
+   - `url=http://localhost:3000/` -> same private-address rejection (extra check beyond
+     the plan's two examples, since this app's own port is an obvious SSRF target).
+   - `url=https://hnrss.org/frontpage` (real external host, not blocked by the guard) ->
+     passed the guard, then failed downstream with `warning:"rss.feed: Feed 403"` (this
+     sandbox's proxy again) — confirms the guard doesn't false-positive on legitimate
+     external feeds.
+5. Re-curled all 16 widget endpoints after both changes: all still `ok:true`, same
+   mock/live/stale distribution as the Phase 0 session (stripe/gcal/gmail mock; weather/
+   rss/github/system.gpu stale from proxy/sandbox limits; system.overview/disks/processes
+   live) — confirms caching and the new guard didn't regress anything else.
+
+Not touched this session: Phase 1 item 3 (system GPU — needs the human's own Ryzen 5 /
+RTX 3070 machine, cannot be done from this sandbox), and Phases 2–6 unchanged from the
+2026-08-26 session's notes. `npm test`/Playwright were not re-run this session (no test
+runner exists yet — that's Phase 6, untouched); the smoke checks above were done with
+`curl` against the running dev-built server instead.
+
+Everything is committed to `claude/practical-ritchie-wo1949` but **not merged/deployed**,
+same caveats as the 2026-08-26 entry above (no real credentials, sandboxed egress).

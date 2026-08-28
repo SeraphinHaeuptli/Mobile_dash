@@ -1,5 +1,6 @@
 import 'server-only';
 import type { ConnectorServer, HandlerResult, Json, WidgetSettings } from './types';
+import { cacheTtlFor, withCache } from './cache';
 
 import stripe from '@/connectors/stripe/server';
 import gcal from '@/connectors/gcal/server';
@@ -24,5 +25,7 @@ export function resolveWidget(widgetId: string) {
 export async function runWidget(widgetId: string, settings: WidgetSettings): Promise<HandlerResult<Json>> {
   const found = resolveWidget(widgetId);
   if (!found) throw new Error(`Unknown widget: ${widgetId}`);
-  return found.handler(settings);
+  const ttl = cacheTtlFor(found.connector.meta.id);
+  const key = `${widgetId}:${JSON.stringify(settings)}`;
+  return withCache(key, ttl, () => found.handler(settings));
 }

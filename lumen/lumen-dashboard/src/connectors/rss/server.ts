@@ -1,5 +1,6 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { assertPublicHttpUrl } from '@/lib/ssrf';
 import { seeded, intBetween, pick, minutesFromNow } from '@/lib/mock';
 
 /** No credentials needed — this connector just fetches and parses a feed URL. */
@@ -150,8 +151,7 @@ export function parseFeed(xml: string, url: string, limit: number): FeedData {
 /* ---------- live ---------- */
 
 async function liveFeed(url: string, limit: number): Promise<FeedData> {
-  const parsed = new URL(url);
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported feed protocol');
+  const parsed = await assertPublicHttpUrl(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
