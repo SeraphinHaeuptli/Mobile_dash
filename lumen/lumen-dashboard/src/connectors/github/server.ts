@@ -1,6 +1,7 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cached, cacheKey } from '@/lib/cache';
 import {
   mockActivity,
   mockContributions,
@@ -13,6 +14,7 @@ import type { ActivityData, ActivityEvent, ActivityKind, ContribDay, ContribData
 
 const ENV = ['GITHUB_TOKEN'];
 const API = 'https://api.github.com';
+const CACHE_TTL_SECONDS = 120;
 
 /* ---------- settings ---------- */
 
@@ -194,7 +196,7 @@ const connector: ConnectorServer = {
       const limit = count(s, 'limit', 8, 1, 30);
       return withFallback(
         hasEnv(ENV),
-        () => liveActivity(username, limit),
+        () => cached(cacheKey('github.activity', s), CACHE_TTL_SECONDS, () => liveActivity(username, limit)),
         () => mockActivity(seedFor('github.activity', s), username, limit),
         'github.activity',
       );
@@ -205,7 +207,7 @@ const connector: ConnectorServer = {
       const limit = count(s, 'limit', 6, 1, 30);
       return withFallback(
         hasEnv(ENV),
-        () => liveRepos(username, sort, limit),
+        () => cached(cacheKey('github.repos', s), CACHE_TTL_SECONDS, () => liveRepos(username, sort, limit)),
         () => mockRepos(seedFor('github.repos', s), username, sort, limit),
         'github.repos',
       );
@@ -214,7 +216,7 @@ const connector: ConnectorServer = {
       const username = text(s, 'username', 'octocat');
       return withFallback(
         hasEnv(ENV),
-        () => liveContributions(username),
+        () => cached(cacheKey('github.contributions', s), CACHE_TTL_SECONDS, () => liveContributions(username)),
         () => mockContributions(seedFor('github.contributions', s), username),
         'github.contributions',
       );

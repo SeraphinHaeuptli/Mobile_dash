@@ -40,8 +40,10 @@ src/lib/connectors.ts       CLIENT-SAFE ConnectorMeta[] (duplicated from server 
                             because server halves import node: builtins)
 src/lib/store.ts            read/writeConfig -> data/layout.json + DEFAULT_CONFIG
 src/lib/env.ts              hasEnv(keys)
-src/lib/fallback.ts         NEW (Phase 0): withFallback(), fromSample(), debugLog(),
-                            debugFetch() — the one shared live/mock/stale helper.
+src/lib/fallback.ts         withFallback(), fromSample(), debugLog(), debugFetch() —
+                            the one shared live/mock/stale helper (Phase 0).
+src/lib/cache.ts            NEW (Phase 1): cached(), cacheKey() — in-memory TTL cache
+                            + in-flight dedup for live connector calls.
 src/lib/mock.ts             seeded() pick() intBetween() walk() minutesFromNow()
 src/lib/useWidgetData.ts    client hook: POST /api/widget/<id>, auto-refresh, reload()
 
@@ -102,6 +104,13 @@ src/connectors/<id>/mock.ts     optional
   init)` (src/lib/fallback.ts) instead of raw `fetch` — it is a transparent passthrough
   that additionally logs one line (method, url, status, ms; **never** headers/body/secrets)
   when `DEBUG_CONNECTORS=1`.
+- A connector's live call (the function passed as `live` to `withFallback`) should be
+  wrapped in `cached(cacheKey(widgetId, settings), ttlSeconds, () => liveXxx(...))` from
+  `src/lib/cache.ts` — in-memory, keyed by widget id + sorted settings, per-connector TTL
+  (weather 600s, rss 300s, github 120s, stripe/gcal/gmail 60s; `system` is exempt, see
+  above). A failed live call is never cached, so a real outage is never masked as "just
+  serving from cache" — the next call always retries live. `withFallback`'s own mock branch
+  is never cached; only the live attempt is.
 - Mocks are deterministic: `seeded(widgetId + settings + today)`.
 - Widget UI is built only from `@/components/ui` primitives + globals.css classes.
   No hardcoded colors except a connector's `meta.accent`; use `var(--text-dim)` etc.
@@ -132,8 +141,12 @@ confirms the fix end-to-end, not just in isolation. Screenshot taken during the 
 
 ## Not done
 Real credentials never exercised against any live API from a network that can actually
-reach them. No caching, no rate-limit handling, no OAuth refresh, no automated tests, no
-SSRF guard on the RSS feed URL. See PLAN.md.
+reach them. No rate-limit handling, no OAuth refresh, no automated tests. TTL caching
+(Phase 1.1) and the RSS SSRF guard (Phase 1.2) are implemented but, like everything else
+that touches a real API, only verified against a real network from a session/machine with
+egress — this sandbox's proxy blocks every live host, so the "cache actually cuts upstream
+calls" claim rests on a standalone unit-style test of the cache module, not the live
+weather/rss endpoints. See PLAN.md.
 
 ## Known issue to flag to the human (not fixed automatically — out of PLAN.md's scope)
 `npm install` on 2026-08-26 reported **1 critical + 1 high** `npm audit` finding, both
@@ -209,3 +222,94 @@ no real credentials exist in this sandbox, so Phases 2–4's actual API-correctn
 (field mapping, pagination, OAuth) still needs a human with real keys and, ideally, network
 egress to the real hosts (this sandbox's proxy blocks stripe.com/open-meteo.com/etc., which
 is exactly why Phase 0's honest-failure behavior mattered for testing it at all).
+
+### 2026-08-29 — Phase 1.1 (caching) and 1.2 (RSS SSRF guard) implemented
+
+Scheduled/autonomous session. `git log` showed Phase 0 already merged to `main` via PR #1;
+picked up from PLAN.md's current checklist state. Phase 1.3 (System GPU on the real Ryzen
+5 / RTX 3070 machine) needs the human's hardware and was left unchecked, per PLAN.md's own
+instruction to skip steps that need a human rather than blocking the session on them.
+
+**Caching (Phase 1.1).** New `src/lib/cache.ts`: `cached(key, ttlSeconds, live)` — an
+in-memory `Map` keyed by string, storing `{value, expiresAt}`; a second `Map` tracks
+in-flight promises per key so concurrent callers for the same not-yet-cached key share one
+upstream call instead of each firing their own. A failed `live()` call is deliberately never
+written to the cache (only the `.then()` branch populates `store`), so a real outage always
+surfaces on the next request rather than being masked by a stale success — this matters
+because `withFallback` already treats a live failure as `'stale'` with a `warning`; caching
+a failure would have made that indistinguishable from a slow-to-recover real API. Also
+exports `cacheKey(widgetId, settings)`, reusing the same "sort keys, join as k=v&k=v" pattern
+the connectors already use for mock seeds (e.g. `seedFor` in weather/rss/github).
+
+Wired into all 6 non-system connectors, wrapping only the `live` argument to `withFallback`
+(never the mock branch): weather (600s, both handlers), rss (300s), github (120s, all 3
+handlers), stripe (60s, all 3 handlers), gcal (60s, both handlers), gmail (60s). `system` is
+intentionally untouched — PLAN.md calls it out as "not cached" since its fallback is
+per-field via `fromSample()`, not per-call via `withFallback()`.
+
+**RSS SSRF guard (Phase 1.2).** `src/connectors/rss/server.ts` gained `assertSafeFeedUrl()`,
+called from `liveFeed()` before the fetch: rejects non-`http(s)` protocols (the existing
+check, unchanged), then resolves the hostname with `dns.lookup(hostname, {all: true,
+verbatim: true})` (`node:dns` promises) and rejects if any resolved address falls in
+127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, `::1`, or an
+IPv4-mapped IPv6 form of any of those (`::ffff:x.x.x.x`) — this catches DNS rebinding
+(`evil.com` resolving to `127.0.0.1`), not just literal private-IP URLs. A DNS lookup
+failure is also treated as unsafe (fails closed) rather than silently proceeding.
+
+**Bug caught during verification, not by inspection.** The first implementation of the
+private-range check (`ipv4Range()`, computing `[start & mask, ...]`) left the lower bound of
+each range as a *signed* 32-bit int — JS's `&` operator returns signed results, and every
+range whose base address has its top bit set (172.16/12, 192.168/16, 169.254/16) got a large
+*negative* lower bound. That made `n >= lo` trivially true for any address, so the guard
+false-positived on essentially every public IP below that range's upper bound — confirmed by
+testing `isPrivateV4('159.89.243.242')` (a real public IP) and getting `true`. A curl smoke
+test against the running dashboard would have shown "SSRF guard works" for the wrong reason
+(everything blocked, not just private ranges) if not for that direct unit check. Fixed by
+coercing the AND result too: `(start & mask) >>> 0`. Left as a durable lesson for future
+sessions: a security guard that blocks everything passes a shallow "does it block the bad
+case" test just as well as a correct one — verify it *doesn't* block the good case too.
+
+**Verification performed** (all in `lumen/lumen-dashboard/`, after `npm install` — no
+`node_modules` in this fresh session):
+1. `npx tsc --noEmit` — clean.
+2. `npm run build` — clean, all routes compile (ran twice, once after the SSRF bugfix, both
+   clean).
+3. Cache module logic, tested standalone (network-independent, since this sandbox can't
+   reach any real API to exercise the live-success path — see caveat below): a script
+   against a stripped copy of `cache.ts` (only the `server-only` import removed) confirmed
+   (a) 5 concurrent calls for the same key produce exactly 1 upstream call, all callers get
+   the same result; (b) repeated sequential calls within the TTL make no new upstream call;
+   (c) after TTL expiry, the next call does hit upstream again; (d) a different settings key
+   never shares the first key's cache entry; (e) a failing `live()` is called every time
+   (3 calls, 3 failures) — never cached.
+4. RSS SSRF guard, tested live against the running app (`npm run start`,
+   `DEBUG_CONNECTORS=1`, POSTing directly to `/api/widget/rss.feed` — note the route expects
+   the settings object as the raw POST body, not `{"settings": {...}}`, tripped over that
+   once before finding it in `route.ts`): `file:///etc/passwd` → `stale` / "Unsupported feed
+   protocol"; `http://169.254.169.254/`, `http://127.0.0.1:3000/`, `http://localhost:3000/`
+   (DNS-resolved, not a literal IP), `http://10.0.0.5/`, `http://192.168.1.1/`,
+   `http://172.16.0.1/` → all `stale` / "Feed host is not a public address", never data.
+   `https://hnrss.org/frontpage` (a legitimate public feed) passed the guard and only failed
+   afterwards on this sandbox's own proxy 403 — confirms the guard isn't overblocking real
+   feeds, which is what step 3 of the caveat above was really checking for.
+5. Full regression smoke test: all 16 widget endpoints still return `ok:true` with the same
+   `mode` values as the Phase 0 session (mock-only connectors → `mock`; github/weather/rss →
+   `stale`, ambient sandbox `GITHUB_TOKEN`/proxy 403 as before; `system.overview/disks/
+   processes` → `live`; `system.gpu` → `stale`, no `nvidia-smi` here).
+
+**Caveat carried forward** (same root cause as Phase 0's): this sandbox's proxy returns 403
+for every real upstream host, so `live()` never *succeeds* here — the literal PLAN.md
+acceptance test for caching ("hammer weather.current 10×, count 1 upstream request in
+DEBUG_CONNECTORS output") could not be run against the real API, only against the cache
+module's own logic in isolation (verification step 3 above). A session with real egress (or
+the human's own machine) should re-run that exact hammer test against a working connector to
+confirm the wiring, not just the module, behaves as intended end-to-end.
+
+Not touched this session: Phase 1.3 (needs the human's machine), Phases 2–6 (all need either
+a human with real credentials/OAuth console access, or are explicitly deferred per PLAN.md's
+own ordering). `npm audit` finding on `next@14.2.15` still present, still deliberately not
+acted on (unchanged from Phase 0's note above).
+
+Committed and pushed to `claude/practical-ritchie-wjk3vj` (this session's designated
+branch — note this differs from the earlier session's `claude/practical-ritchie-7p74hi`,
+which was already merged to `main`).

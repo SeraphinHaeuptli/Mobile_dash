@@ -1,9 +1,12 @@
+import { promises as dns } from 'node:dns';
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cached, cacheKey } from '@/lib/cache';
 import { seeded, intBetween, pick, minutesFromNow } from '@/lib/mock';
 
 /** No credentials needed — this connector just fetches and parses a feed URL. */
 const ENV: string[] = [];
+const CACHE_TTL_SECONDS = 300;
 
 export interface FeedItem {
   id: string;
@@ -147,11 +150,65 @@ export function parseFeed(xml: string, url: string, limit: number): FeedData {
   return { title: feedTitle, url, items };
 }
 
+/* ---------- SSRF guard ---------- */
+
+function ipv4ToInt(ip: string): number {
+  return ip.split('.').reduce((acc, part) => (acc << 8) + Number(part), 0) >>> 0;
+}
+
+/** [start, end] inclusive, both as uint32. */
+function ipv4Range(base: string, prefixBits: number): [number, number] {
+  const start = ipv4ToInt(base);
+  const mask = prefixBits === 0 ? 0 : (~0 << (32 - prefixBits)) >>> 0;
+  return [(start & mask) >>> 0, (start | (~mask >>> 0)) >>> 0];
+}
+
+const PRIVATE_V4_RANGES: [number, number][] = [
+  ipv4Range('127.0.0.0', 8),
+  ipv4Range('10.0.0.0', 8),
+  ipv4Range('172.16.0.0', 12),
+  ipv4Range('192.168.0.0', 16),
+  ipv4Range('169.254.0.0', 16),
+];
+
+function isPrivateV4(address: string): boolean {
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(address)) return false;
+  const n = ipv4ToInt(address);
+  return PRIVATE_V4_RANGES.some(([lo, hi]) => n >= lo && n <= hi);
+}
+
+function isPrivateAddress(address: string): boolean {
+  const normalized = address.toLowerCase();
+  if (normalized === '::1') return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(normalized);
+  if (mapped) return isPrivateV4(mapped[1]);
+  return isPrivateV4(normalized);
+}
+
+/**
+ * The feed URL is user input. Reject anything that isn't http(s), and reject
+ * hosts that resolve (directly, or via DNS — catches DNS rebinding) to a
+ * private/loopback/link-local address, so the server can't be used to probe
+ * the local network or cloud metadata endpoints.
+ */
+async function assertSafeFeedUrl(parsed: URL): Promise<void> {
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported feed protocol');
+  let records: { address: string }[];
+  try {
+    records = await dns.lookup(parsed.hostname, { all: true, verbatim: true });
+  } catch {
+    throw new Error('Could not resolve feed host');
+  }
+  if (records.length === 0 || records.some((r) => isPrivateAddress(r.address))) {
+    throw new Error('Feed host is not a public address');
+  }
+}
+
 /* ---------- live ---------- */
 
 async function liveFeed(url: string, limit: number): Promise<FeedData> {
   const parsed = new URL(url);
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported feed protocol');
+  await assertSafeFeedUrl(parsed);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -240,7 +297,12 @@ const connector: ConnectorServer = {
     'rss.feed': (s) => {
       const url = textSetting(s, 'url', 'https://hnrss.org/frontpage');
       const limit = numberSetting(s, 'limit', 8, 1, 40);
-      return withFallback(true, () => liveFeed(url, limit), () => mockFeed(seedFor('rss.feed', s), url, limit), 'rss.feed');
+      return withFallback(
+        true,
+        () => cached(cacheKey('rss.feed', s), CACHE_TTL_SECONDS, () => liveFeed(url, limit)),
+        () => mockFeed(seedFor('rss.feed', s), url, limit),
+        'rss.feed',
+      );
     },
   },
 };

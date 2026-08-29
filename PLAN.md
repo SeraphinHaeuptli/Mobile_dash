@@ -60,16 +60,29 @@ implemented".
 
 Weather, RSS and System already run live; harden them.
 
-- [ ] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
+- [x] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
    `widgetId + JSON.stringify(settings)`. Wrap live calls. TTLs: weather 600s, rss 300s,
-   github 120s, stripe 60s, gcal/gmail 60s; system not cached.
+   github 120s, stripe 60s, gcal/gmail 60s; system not cached. — DONE 2026-08-29
    → verify: hammer `/api/widget/weather.current` 10× and count 1 upstream request in
    DEBUG_CONNECTORS output.
-- [ ] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
+   Verified the cache mechanism itself (dedup of concurrent calls, TTL expiry, per-key
+   isolation, failures never cached) with a standalone logic test — see PROJECT.md session
+   log. Could not literally verify "1 upstream request" against the real weather API in
+   this sandbox: every live call fails at the proxy (403) before it could ever populate the
+   cache, so each hammered call retries live, by design (a failed call must not be cached
+   or a real outage would look identical to a still-warm cache). This is the same sandbox
+   network limitation PLAN.md's "Standing caution" section already calls out — needs
+   re-verification against the real API from a session/machine with egress.
+- [x] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
    reject hosts resolving to private ranges (127/8, 10/8, 172.16/12, 192.168/16,
-   169.254/16, ::1).
+   169.254/16, ::1). — DONE 2026-08-29
    → verify: `url=file:///etc/passwd` and `url=http://169.254.169.254/` both return an
    error state, not data.
+   Verified live against the running dashboard (see PROJECT.md session log) — both cases,
+   plus 127.0.0.1, localhost, 10.x, 192.168.x and 172.16.x, come back `mode:"stale"` with
+   `warning` explaining why, never data; a legitimate public hostname (hnrss.org) passes
+   the guard and only fails afterwards on the sandbox's own proxy 403, confirming the guard
+   isn't overblocking either.
 - [ ] 3. **System GPU.** Only path needing the target machine (Ryzen 5 / RTX 3070). Run
    `system.gpu` there, confirm `nvidia-smi` parsing against real output, multi-GPU safe.
    → verify: values match `nvidia-smi` run manually, within one refresh interval.
