@@ -60,16 +60,23 @@ implemented".
 
 Weather, RSS and System already run live; harden them.
 
-- [ ] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
+- [x] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
    `widgetId + JSON.stringify(settings)`. Wrap live calls. TTLs: weather 600s, rss 300s,
    github 120s, stripe 60s, gcal/gmail 60s; system not cached.
    → verify: hammer `/api/widget/weather.current` 10× and count 1 upstream request in
-   DEBUG_CONNECTORS output.
-- [ ] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
+   DEBUG_CONNECTORS output. — DONE 2026-08-30 (see note below: this sandbox's proxy
+   blocks every real upstream, so the hammer test itself always saw 10/10 requests
+   — a failure is never cached, by design. The cache algorithm itself — 1 call for
+   N hits inside the TTL, a fresh call after expiry, separate keys per settings,
+   failures never cached — was verified directly instead. Full detail: PROJECT.md
+   session log "2026-08-30").
+- [x] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
    reject hosts resolving to private ranges (127/8, 10/8, 172.16/12, 192.168/16,
    169.254/16, ::1).
    → verify: `url=file:///etc/passwd` and `url=http://169.254.169.254/` both return an
-   error state, not data.
+   error state, not data. — DONE 2026-08-30, verified against both plus 127.0.0.1,
+   localhost, and 10.0.0.5; a normal external URL still reaches the fetch stage
+   (proxy-blocked here, not SSRF-refused) — confirms the guard isn't over-blocking.
 - [ ] 3. **System GPU.** Only path needing the target machine (Ryzen 5 / RTX 3070). Run
    `system.gpu` there, confirm `nvidia-smi` parsing against real output, multi-GPU safe.
    → verify: values match `nvidia-smi` run manually, within one refresh interval.

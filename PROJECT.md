@@ -42,6 +42,8 @@ src/lib/store.ts            read/writeConfig -> data/layout.json + DEFAULT_CONFI
 src/lib/env.ts              hasEnv(keys)
 src/lib/fallback.ts         NEW (Phase 0): withFallback(), fromSample(), debugLog(),
                             debugFetch() — the one shared live/mock/stale helper.
+src/lib/cache.ts            NEW (Phase 1): cached(), cacheKeyFor() — in-memory TTL cache
+                            wrapping every credentialed/keyless live call except system.
 src/lib/mock.ts             seeded() pick() intBetween() walk() minutesFromNow()
 src/lib/useWidgetData.ts    client hook: POST /api/widget/<id>, auto-refresh, reload()
 
@@ -132,8 +134,8 @@ confirms the fix end-to-end, not just in isolation. Screenshot taken during the 
 
 ## Not done
 Real credentials never exercised against any live API from a network that can actually
-reach them. No caching, no rate-limit handling, no OAuth refresh, no automated tests, no
-SSRF guard on the RSS feed URL. See PLAN.md.
+reach them. No rate-limit handling, no OAuth refresh, no automated tests, no real-machine
+GPU verification. See PLAN.md.
 
 ## Known issue to flag to the human (not fixed automatically — out of PLAN.md's scope)
 `npm install` on 2026-08-26 reported **1 critical + 1 high** `npm audit` finding, both
@@ -209,3 +211,76 @@ no real credentials exist in this sandbox, so Phases 2–4's actual API-correctn
 (field mapping, pagination, OAuth) still needs a human with real keys and, ideally, network
 egress to the real hosts (this sandbox's proxy blocks stripe.com/open-meteo.com/etc., which
 is exactly why Phase 0's honest-failure behavior mattered for testing it at all).
+
+### 2026-08-30 — Phase 1 items 1–2 implemented (caching, RSS SSRF guard)
+
+Scheduled/autonomous session. Picked up PLAN.md at Phase 1 (Phase 0 was already DONE and
+merged into this branch via PR #1). Item 3 (system.gpu against real `nvidia-smi`) needs the
+human's own machine and was left unchecked, as PLAN.md itself says — everything else in
+Phase 1 doesn't need credentials or real egress, so did that instead of blocking.
+
+**1. Caching (`src/lib/cache.ts`, new file).** `cached(key, ttlSeconds, fn)`: a
+`Map<string, {value, expiresAt}>` at module scope (this is a one-process app, see "What it
+is" above, so a plain in-memory map is the whole cache — no Redis, no persistence). Only a
+*successful* `fn()` is stored; a rejection is never cached, so a connector recovers on the
+very next request instead of being stuck "down" for the rest of the TTL — this matters a lot
+here since every live call in this sandbox fails (proxy 403/401), so caching failures would
+have made every widget look permanently broken to anyone testing in this environment.
+`cacheKeyFor(widgetId, settings)` builds the key by sorting the settings object's keys and
+joining `key=value` pairs (same pattern the connectors already use for their mock seeds) —
+different settings on the same widget id never collide.
+
+Wired into every live call except `system` (per PLAN.md — its fallback is per-field via
+`fromSample`, not per-call, so there's nothing at the handler level to memoize):
+`weather.current`/`weather.forecast` 600s, `rss.feed` 300s, `github.activity`/`repos`/
+`contributions` 120s, `stripe.balance`/`revenue`/`payments` 60s, `gcal.agenda`/`next` 60s,
+`gmail.inbox` 60s — exactly the TTL table in PLAN.md. Each handler now wraps its `live`
+thunk passed to `withFallback` in `cached(cacheKeyFor(widgetId, settings), ttl, live)`
+instead of calling it directly; `withFallback`/`debugFetch` themselves are untouched, so a
+cache hit still shows `mode:'live'` (or whatever the cached call resolved to) with no new
+`DEBUG_CONNECTORS` log line, because `debugFetch` — and thus the log line — is inside the
+`live` thunk and simply doesn't run on a hit.
+
+**2. RSS SSRF guard (`src/connectors/rss/server.ts`).** Added `assertPublicHost(hostname)`,
+called right after the existing protocol check in `liveFeed()`, before any fetch. Uses
+`node:dns` `dns.lookup(hostname, {all: true})` — this also covers a literal IP in the URL,
+since `dns.lookup` resolves a dotted-quad to itself without an actual DNS query — and rejects
+if any resolved address falls in 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, 0/8 (added
+0/8 beyond PLAN.md's list: "this network" is equally non-routable and free to add), or is
+`::1` or an IPv4-mapped IPv6 form of any of the above (`::ffff:x.x.x.x`). Other IPv6 ranges
+(ULA `fc00::/7`, link-local `fe80::/10`) are explicitly out of scope for this pass, matching
+what PLAN.md asked for — noted here so a future session doesn't assume IPv6 is fully covered.
+A rejection throws same as any other live failure, so it surfaces as the existing
+`mode:'stale'` + `warning` — no new UI state needed.
+
+**Verification performed** (`lumen/lumen-dashboard/`, `DEBUG_CONNECTORS=1 npm run start`,
+no env keys set):
+1. `npx tsc --noEmit` and `npm run build` — both clean.
+2. All 16 widget endpoints re-curled: identical `mode` per widget to the Phase-0 baseline
+   (mock-only → `mock`; github/weather/rss/system.gpu → `stale`, real 401/403s; system
+   overview/disks/processes → `live`) — confirms nothing regressed.
+3. RSS SSRF guard, POST body is the settings object directly (not nested under `settings` —
+   caught this from `route.ts`, first attempt with a nested body silently no-opped since the
+   `url` setting was then just `undefined` and fell back to the default feed):
+   - `{"url":"file:///etc/passwd"}` → `stale`, `"Unsupported feed protocol"` (existing check).
+   - `{"url":"http://169.254.169.254/"}` → `stale`, `"Refused: 169.254.169.254 resolves to a
+     private address (169.254.169.254)"`.
+   - `{"url":"http://127.0.0.1:3000/"}`, `{"url":"http://10.0.0.5/"}` → same `Refused:` shape.
+   - `{"url":"http://localhost:3000/"}` → `Refused: localhost resolves to a private address
+     (127.0.0.1)"` — confirms the DNS-lookup step, not just a literal-IP string match.
+   - A normal feed URL (default `hnrss.org`) still reaches `debugFetch` and gets the
+     sandbox's real proxy 403 — confirms the guard isn't over-blocking ordinary feeds.
+4. Caching: hammering `weather.current` 10× in this sandbox always produced 10 upstream
+   requests in the debug log, not 1 — expected and not a bug: every live call here fails
+   (proxy 403), and only successes are cached, so there was never anything to hit. Since no
+   connector in this environment can succeed, the cache's actual behaviour (memoize a
+   success, don't memoize a failure, separate entries per settings, expire after TTL) was
+   verified directly instead: extracted the identical algorithm from `cache.ts` (same code,
+   minus the `server-only` import, which throws in a plain Node process) into a throwaway
+   script run with `npx tsx`, not committed. Result: 10 calls inside the TTL → 1 real call;
+   after a 2.1s sleep past a 2s TTL → a 2nd real call; a second settings object → a 3rd,
+   separate call; 3 forced-rejection calls → all 3 actually ran (none cached). Confirms the
+   memoization logic is correct; the real proof of "hammer weather.current and see 1 request"
+   still needs a session with real egress to open-meteo.com, or a human's own machine.
+
+Not touched this session: Phase 1 item 3 (needs the human's machine), Phases 2–6.
