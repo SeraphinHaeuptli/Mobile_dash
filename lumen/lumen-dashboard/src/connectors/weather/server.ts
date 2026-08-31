@@ -1,6 +1,10 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cached } from '@/lib/cache';
 import { seeded, intBetween, pick } from '@/lib/mock';
+
+/** Open-Meteo forecasts don't change minute to minute; cache the live call. */
+const TTL_SECONDS = 600;
 
 /**
  * Open-Meteo needs no API key, so this connector is always live and only falls
@@ -330,7 +334,7 @@ const connector: ConnectorServer = {
       const place = placeOf(s);
       return withFallback(
         true,
-        () => liveCurrent(place),
+        () => cached('weather.current', s, TTL_SECONDS, () => liveCurrent(place)),
         () => mockCurrent(seedFor('weather.current', s), place),
         'weather.current',
       );
@@ -340,7 +344,7 @@ const connector: ConnectorServer = {
       const days = Math.min(10, Math.max(1, Math.round(numberSetting(s, 'days', 5))));
       return withFallback(
         true,
-        () => liveForecast(place, days),
+        () => cached('weather.forecast', s, TTL_SECONDS, () => liveForecast(place, days)),
         () => mockForecast(seedFor('weather.forecast', s), place, days),
         'weather.forecast',
       );

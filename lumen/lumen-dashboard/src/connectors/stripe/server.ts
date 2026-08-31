@@ -6,11 +6,13 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cached } from '@/lib/cache';
 import { seeded, intBetween } from '@/lib/mock';
 
 const ENV = ['STRIPE_SECRET_KEY'];
 const API = 'https://api.stripe.com/v1';
 const DAY_MS = 86400000;
+const TTL_SECONDS = 60;
 
 /* ---------- data shapes (mock and live return exactly these) ---------- */
 
@@ -351,9 +353,17 @@ const connector: ConnectorServer = {
   },
   isLive: () => hasEnv(ENV),
   handlers: {
-    'stripe.balance': (s) => withFallback(hasEnv(ENV), () => liveBalance(s), () => mockBalance(s), 'stripe.balance'),
-    'stripe.revenue': (s) => withFallback(hasEnv(ENV), () => liveRevenue(s), () => mockRevenue(s), 'stripe.revenue'),
-    'stripe.payments': (s) => withFallback(hasEnv(ENV), () => livePayments(s), () => mockPayments(s), 'stripe.payments'),
+    'stripe.balance': (s) =>
+      withFallback(hasEnv(ENV), () => cached('stripe.balance', s, TTL_SECONDS, () => liveBalance(s)), () => mockBalance(s), 'stripe.balance'),
+    'stripe.revenue': (s) =>
+      withFallback(hasEnv(ENV), () => cached('stripe.revenue', s, TTL_SECONDS, () => liveRevenue(s)), () => mockRevenue(s), 'stripe.revenue'),
+    'stripe.payments': (s) =>
+      withFallback(
+        hasEnv(ENV),
+        () => cached('stripe.payments', s, TTL_SECONDS, () => livePayments(s)),
+        () => mockPayments(s),
+        'stripe.payments',
+      ),
   },
 };
 

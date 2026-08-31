@@ -6,10 +6,12 @@
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { hasEnv } from '@/lib/env';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cached } from '@/lib/cache';
 import { seeded, intBetween } from '@/lib/mock';
 
 const ENV = ['GMAIL_TOKEN'];
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const TTL_SECONDS = 60;
 
 /* ---------- data shapes (mock and live return exactly these) ---------- */
 
@@ -288,7 +290,8 @@ const connector: ConnectorServer = {
   },
   isLive: () => hasEnv(ENV),
   handlers: {
-    'gmail.inbox': (s) => withFallback(hasEnv(ENV), () => liveInbox(s), () => mockInbox(s), 'gmail.inbox'),
+    'gmail.inbox': (s) =>
+      withFallback(hasEnv(ENV), () => cached('gmail.inbox', s, TTL_SECONDS, () => liveInbox(s)), () => mockInbox(s), 'gmail.inbox'),
   },
 };
 

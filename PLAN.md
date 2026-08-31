@@ -56,16 +56,16 @@ implemented".
 
 ---
 
-## Phase 1 — keyless connectors first (~1h)
+## Phase 1 — keyless connectors first (~1h) — items 1–2 DONE 2026-08-31
 
 Weather, RSS and System already run live; harden them.
 
-- [ ] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
+- [x] 1. **Caching.** Add `src/lib/cache.ts`: in-memory TTL map keyed by
    `widgetId + JSON.stringify(settings)`. Wrap live calls. TTLs: weather 600s, rss 300s,
    github 120s, stripe 60s, gcal/gmail 60s; system not cached.
    → verify: hammer `/api/widget/weather.current` 10× and count 1 upstream request in
    DEBUG_CONNECTORS output.
-- [ ] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
+- [x] 2. **RSS SSRF guard.** The feed URL is user input. Reject non-http(s) schemes, and
    reject hosts resolving to private ranges (127/8, 10/8, 172.16/12, 192.168/16,
    169.254/16, ::1).
    → verify: `url=file:///etc/passwd` and `url=http://169.254.169.254/` both return an
@@ -74,6 +74,19 @@ Weather, RSS and System already run live; harden them.
    `system.gpu` there, confirm `nvidia-smi` parsing against real output, multi-GPU safe.
    → verify: values match `nvidia-smi` run manually, within one refresh interval.
    (Needs the human's actual machine — cannot be done from a sandboxed agent session.)
+
+Implementation notes for future sessions: `cached(widgetId, settings, ttlSeconds, compute)`
+in `src/lib/cache.ts` wraps just the `live()` closure passed to `withFallback` at each call
+site (one `cached(...)` per handler, TTL constant declared once per connector file) — it does
+not touch `withFallback` itself. A cache miss whose `compute()` rejects is never stored, so a
+live failure is retried on the very next request instead of sitting stale for the TTL window
+— caching must never hide the Phase 0 failure signal. The RSS SSRF guard
+(`assertPublicHost()` in `src/connectors/rss/server.ts`) checks the literal IP via
+`net.isIP()` when the feed host is already an address, otherwise resolves it with
+`dns.promises.lookup(hostname, {all:true})` and rejects if any answer falls in a private/
+loopback/link-local range — this also catches DNS-based rebinding to `localhost` etc., not
+just IP literals in the URL. Full verification transcript: PROJECT.md session log, entry
+"2026-08-31 — Phase 1 items 1–2".
 
 ---
 

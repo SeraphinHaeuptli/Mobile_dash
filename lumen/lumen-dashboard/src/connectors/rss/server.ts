@@ -1,6 +1,11 @@
+import { promises as dns } from 'node:dns';
+import net from 'node:net';
 import type { ConnectorServer, WidgetSettings } from '@/lib/types';
 import { debugFetch, withFallback } from '@/lib/fallback';
+import { cached } from '@/lib/cache';
 import { seeded, intBetween, pick, minutesFromNow } from '@/lib/mock';
+
+const TTL_SECONDS = 300;
 
 /** No credentials needed — this connector just fetches and parses a feed URL. */
 const ENV: string[] = [];
@@ -147,11 +152,51 @@ export function parseFeed(xml: string, url: string, limit: number): FeedData {
   return { title: feedTitle, url, items };
 }
 
+/* ---------- SSRF guard: the feed URL is user input ---------- */
+
+/** RFC 1918 / loopback / link-local ranges — never fetch these on the user's behalf. */
+function isPrivateIPv4(ip: string): boolean {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((p) => !Number.isFinite(p) || p < 0 || p > 255)) return false;
+  const [a, b] = parts;
+  if (a === 0) return true; // 0.0.0.0/8
+  if (a === 127) return true; // 127.0.0.0/8 loopback
+  if (a === 10) return true; // 10.0.0.0/8
+  if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12
+  if (a === 192 && b === 168) return true; // 192.168.0.0/16
+  if (a === 169 && b === 254) return true; // 169.254.0.0/16 link-local (incl. cloud metadata)
+  return false;
+}
+
+function isPrivateAddress(ip: string): boolean {
+  if (!ip.includes(':')) return isPrivateIPv4(ip);
+  const lower = ip.toLowerCase();
+  if (lower === '::1' || lower === '::') return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+  if (mapped) return isPrivateIPv4(mapped[1]);
+  const firstHextet = lower.split(':')[0];
+  if (/^f[cd][0-9a-f]{2}$/.test(firstHextet)) return true; // fc00::/7 unique local
+  if (/^fe[89ab][0-9a-f]$/.test(firstHextet)) return true; // fe80::/10 link-local
+  return false;
+}
+
+/** Rejects a literal private IP outright, and a hostname whose DNS answer is private. */
+async function assertPublicHost(hostname: string): Promise<void> {
+  if (net.isIP(hostname)) {
+    if (isPrivateAddress(hostname)) throw new Error('Feed host is not a public address');
+    return;
+  }
+  const records = await dns.lookup(hostname, { all: true, verbatim: true });
+  if (records.length === 0) throw new Error('Feed host does not resolve');
+  if (records.some((r) => isPrivateAddress(r.address))) throw new Error('Feed host resolves to a private address');
+}
+
 /* ---------- live ---------- */
 
 async function liveFeed(url: string, limit: number): Promise<FeedData> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('Unsupported feed protocol');
+  await assertPublicHost(parsed.hostname);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
@@ -240,7 +285,12 @@ const connector: ConnectorServer = {
     'rss.feed': (s) => {
       const url = textSetting(s, 'url', 'https://hnrss.org/frontpage');
       const limit = numberSetting(s, 'limit', 8, 1, 40);
-      return withFallback(true, () => liveFeed(url, limit), () => mockFeed(seedFor('rss.feed', s), url, limit), 'rss.feed');
+      return withFallback(
+        true,
+        () => cached('rss.feed', s, TTL_SECONDS, () => liveFeed(url, limit)),
+        () => mockFeed(seedFor('rss.feed', s), url, limit),
+        'rss.feed',
+      );
     },
   },
 };

@@ -42,6 +42,9 @@ src/lib/store.ts            read/writeConfig -> data/layout.json + DEFAULT_CONFI
 src/lib/env.ts              hasEnv(keys)
 src/lib/fallback.ts         NEW (Phase 0): withFallback(), fromSample(), debugLog(),
                             debugFetch() — the one shared live/mock/stale helper.
+src/lib/cache.ts            NEW (Phase 1): cached(widgetId, settings, ttlSeconds, compute)
+                            — in-memory TTL map wrapping a connector's live() closure. Never
+                            caches a rejected compute(); see Conventions below.
 src/lib/mock.ts             seeded() pick() intBetween() walk() minutesFromNow()
 src/lib/useWidgetData.ts    client hook: POST /api/widget/<id>, auto-refresh, reload()
 
@@ -102,6 +105,13 @@ src/connectors/<id>/mock.ts     optional
   init)` (src/lib/fallback.ts) instead of raw `fetch` — it is a transparent passthrough
   that additionally logs one line (method, url, status, ms; **never** headers/body/secrets)
   when `DEBUG_CONNECTORS=1`.
+- Every credentialed/keyless-but-networked live call (all except `system`) is wrapped in
+  `cached(widgetId, settings, ttlSeconds, compute)` from `src/lib/cache.ts` — wrap the same
+  closure that's passed as `live` to `withFallback`, e.g.
+  `() => cached('stripe.balance', s, 60, () => liveBalance(s))`. TTLs (PLAN.md Phase 1):
+  weather 600s, rss 300s, github 120s, stripe/gcal/gmail 60s. A failed `compute()` is never
+  cached, so a live failure is retried next request, not stuck stale for the TTL. `system`
+  is exempt (per-field fallback, not per-call — see `fromSample()` above).
 - Mocks are deterministic: `seeded(widgetId + settings + today)`.
 - Widget UI is built only from `@/components/ui` primitives + globals.css classes.
   No hardcoded colors except a connector's `meta.accent`; use `var(--text-dim)` etc.
@@ -132,8 +142,8 @@ confirms the fix end-to-end, not just in isolation. Screenshot taken during the 
 
 ## Not done
 Real credentials never exercised against any live API from a network that can actually
-reach them. No caching, no rate-limit handling, no OAuth refresh, no automated tests, no
-SSRF guard on the RSS feed URL. See PLAN.md.
+reach them. No rate-limit handling, no OAuth refresh, no automated tests. GPU parsing
+unverified against a real GPU (needs the human's own machine). See PLAN.md.
 
 ## Known issue to flag to the human (not fixed automatically — out of PLAN.md's scope)
 `npm install` on 2026-08-26 reported **1 critical + 1 high** `npm audit` finding, both
@@ -209,3 +219,68 @@ no real credentials exist in this sandbox, so Phases 2–4's actual API-correctn
 (field mapping, pagination, OAuth) still needs a human with real keys and, ideally, network
 egress to the real hosts (this sandbox's proxy blocks stripe.com/open-meteo.com/etc., which
 is exactly why Phase 0's honest-failure behavior mattered for testing it at all).
+
+### 2026-08-31 — Phase 1 items 1–2 implemented (caching, RSS SSRF guard)
+
+Scheduled/autonomous session. `npm install` was needed first (`node_modules` was empty in
+this fresh container) — reproduced the already-documented 1 critical + 1 high `npm audit`
+finding on `next@14.2.15`; still deliberately left alone, same reasoning as before.
+
+Implemented PLAN.md Phase 1, items 1 and 2 (item 3, real GPU verification, needs the
+human's own machine and was left unchecked, as PLAN.md says to do rather than blocking the
+session on it):
+
+- New `src/lib/cache.ts`: `cached(widgetId, settings, ttlSeconds, compute)` — an in-memory
+  `Map` keyed by `` `${widgetId}|${JSON.stringify(settings)}` ``. On a fresh key or an
+  expired entry it awaits `compute()` and stores the result; a rejected `compute()` is not
+  stored, so failures retry next call instead of freezing `mode:'stale'` for the TTL window.
+  Logs a `debugLog` line on a cache hit (`DEBUG_CONNECTORS=1`) so a hit is visible next to
+  the existing per-request fetch lines.
+- Wrapped the `live` closure passed to `withFallback` in all six networked connectors'
+  handlers (weather.current/forecast, rss.feed, github.activity/repos/contributions,
+  stripe.balance/revenue/payments, gcal.agenda/next, gmail.inbox) with `cached(...)` using
+  the TTLs PLAN.md specifies: weather 600s, rss 300s, github 120s, stripe/gcal/gmail 60s.
+  `system` untouched — it doesn't use `withFallback` at all (per-field `sample` flag, see
+  Conventions above).
+- RSS SSRF guard in `src/connectors/rss/server.ts`: new `assertPublicHost(hostname)`,
+  called from `liveFeed()` right after the existing protocol check. A literal IP
+  (`net.isIP`) is checked directly against `isPrivateAddress()`; a hostname is resolved via
+  `dns.promises.lookup(hostname, {all:true, verbatim:true})` and rejected if *any* returned
+  address is private — this also blocks `http://localhost/`-style DNS rebinding, not just
+  IP literals in the URL. `isPrivateAddress` covers 0.0.0.0/8, 127.0.0.0/8 (loopback),
+  10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 (link-local, covers the cloud
+  metadata IP PLAN.md calls out) for IPv4, and `::1`, `::`, IPv4-mapped `::ffff:x.x.x.x`,
+  `fc00::/7` (unique-local) and `fe80::/10` (link-local) for IPv6.
+
+Verification performed (all in `lumen/lumen-dashboard/`):
+1. `npx tsc --noEmit` — clean. `npm run build` — clean, all routes compile.
+2. Caching, unit-level (this sandbox's proxy blocks the real upstream hosts with a 403 on
+   every attempt — see Standing caution in PLAN.md — so a live *success* can't be exercised
+   end-to-end here; verified `cached()` itself directly instead, via a scratch ts-node
+   script, `server-only`'s client-component guard stubbed out for the run, deleted after):
+   10 calls with the same widget id + settings inside the TTL → `compute()` ran once;
+   changing settings → a second, independent call; 3 calls to a failing `compute()` → all 3
+   actually ran (no caching of failures); a 1s-TTL entry re-ran `compute()` after the TTL
+   elapsed. All four assertions passed.
+   Also ran the PLAN.md-literal version against the live server with
+   `DEBUG_CONNECTORS=1`: hammered `/api/widget/weather.current` 10× — every one of the 10
+   attempts *did* hit `debugFetch` (10 log lines, each a 403 from the sandbox proxy), which
+   is the expected, correct behaviour given `cached()` never stores a rejected `compute()` —
+   confirms the "don't hide a live failure behind the cache" design choice rather than
+   contradicting the unit-level result above.
+3. RSS SSRF guard, against the running server (`POST /api/widget/rss.feed` with the id's
+   settings as the raw JSON body — not `{"settings":{...}}`, a request-shape mistake caught
+   and corrected mid-session by noticing every response echoed the *default* feed URL
+   instead of the one just sent):
+   - `url:"file:///etc/passwd"` → `mode:"stale"`, `warning:"rss.feed: Unsupported feed
+     protocol"` (existing protocol check, still fires first).
+   - `url:"http://169.254.169.254/"` → `warning:"...Feed host is not a public address"`.
+   - `url:"http://127.0.0.1:3000/"` and `url:"http://10.0.0.5/"` → same, literal-IP path.
+   - `url:"http://localhost:3000/"` → `warning:"...Feed host resolves to a private
+     address"` — the DNS-lookup path, not just the IP-literal fast path.
+   - `url:"https://hnrss.org/frontpage"` (a real public host) → still attempts the live
+     call and fails only on the sandbox's proxy 403, exactly like every other connector —
+     confirms the guard doesn't false-positive on legitimate feeds.
+
+Not touched this session: Phase 1 item 3 (needs the human's Ryzen 5 / RTX 3070 machine),
+Phases 2–6. `npm audit` finding unchanged, still flagged, still deliberately not acted on.
