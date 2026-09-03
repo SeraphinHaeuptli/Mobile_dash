@@ -6,8 +6,8 @@ export default function LegalLayout({ children }: { children: ReactNode }) {
   return (
     <>
       <SiteHeader />
-      <main id="main" className="mx-auto w-full max-w-3xl px-6 pb-24 pt-8">
-        {children}
+      <main id="main" className="mx-auto w-full max-w-6xl px-6 pb-24 pt-8">
+        <div className="max-w-3xl">{children}</div>
       </main>
     </>
   );

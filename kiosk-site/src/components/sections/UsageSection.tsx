@@ -26,9 +26,18 @@ const MODES = [
   },
 ];
 
+// Broken one key per line rather than the README's compact form: the compact
+// form needs ~60 characters, which overflows this column on a laptop.
 const ENDPOINT_EXAMPLE = `{
-  "session": { "used": 0.62, "resetsAt": "2026-09-03T22:00:00Z" },
-  "week":    { "used": 41, "limit": 100, "resetsInSeconds": 259200 }
+  "session": {
+    "used": 0.62,
+    "resetsAt": "2026-09-03T22:00:00Z"
+  },
+  "week": {
+    "used": 41,
+    "limit": 100,
+    "resetsInSeconds": 259200
+  }
 }`;
 
 export function UsageSection() {

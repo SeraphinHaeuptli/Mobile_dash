@@ -115,6 +115,12 @@
     line-height: 1.7;
   }
 
+  /* The page title only needs the colour back; its size and spacing come from
+     utilities on the element itself. */
+  .legal h1 {
+    color: var(--color-label-primary);
+  }
+
   .legal h2 {
     font-family: var(--font-display);
     font-weight: 600;
