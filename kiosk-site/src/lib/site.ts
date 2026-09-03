@@ -11,8 +11,12 @@ export const site = {
   tagline: 'A clock worth leaving on.',
   description:
     'A StandBy-style kiosk clock for iOS and Android: four faces, eight accents, and a live Claude session meter along the bottom.',
-  /** Set to the deployed origin — used for canonical and Open Graph URLs. */
-  url: 'https://kiosk.example',
+  /**
+   * The deployed origin, used for canonical and Open Graph URLs. Point this at
+   * a custom domain once there is one; until then it is the Vercel production
+   * alias, which stays stable across deployments.
+   */
+  url: 'https://kiosk-site-seraphinhaeuptlis-projects.vercel.app',
 } as const;
 
 /**

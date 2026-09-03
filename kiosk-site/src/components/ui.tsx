@@ -1,10 +1,8 @@
 'use client';
 
-import type { ReactNode } from 'react';
-
 /**
  * The site's control primitives, shaped after the app's own iOS-style settings
- * surfaces — a segmented control, an accent swatch row, a switch.
+ * surfaces — a segmented control and a switch.
  */
 
 export function Segmented<T extends string>({
@@ -83,13 +81,5 @@ export function Switch({
         />
       </span>
     </button>
-  );
-}
-
-export function Panel({ children }: { children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-5 rounded-[22px] border border-glass-line bg-glass p-5 backdrop-blur-xl">
-      {children}
-    </div>
   );
 }
