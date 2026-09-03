@@ -1,0 +1,187 @@
+@import 'tailwindcss';
+
+/**
+ * Tokens are the app's own, ported from `kiosk-clock/src/design/`. The site is
+ * deliberately single-theme: the product is a true-black OLED kiosk face, and a
+ * light-mode marketing page for it would misrepresent what you install.
+ */
+@theme {
+  --color-ink: #000000;
+  --color-grouped: #1c1c1e;
+  --color-raised: #2c2c2e;
+
+  --color-glass: rgba(255, 255, 255, 0.07);
+  --color-glass-line: rgba(255, 255, 255, 0.12);
+
+  --color-label-primary: #ffffff;
+  --color-label-secondary: rgba(235, 235, 245, 0.6);
+  --color-label-tertiary: rgba(235, 235, 245, 0.3);
+  --color-label-quaternary: rgba(235, 235, 245, 0.18);
+
+  --color-warn: #ff9f0a;
+  --color-critical: #ff453a;
+
+  /* Archivo for display: a grotesque drawn for signage, which is what a clock
+     left running across a room actually is. */
+  --font-display: var(--font-archivo), 'Helvetica Neue', Arial, sans-serif;
+  /* The app's own type: on Apple hardware this is literally what it renders. */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-label-primary);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-label-primary);
+    outline-offset: 3px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: rgba(255, 255, 255, 0.18);
+  }
+}
+
+@layer components {
+  /**
+   * Display type follows the app's `tracking()` rule: past 64px the tracking
+   * tightens from -0.015em to -0.035em, the way SF Pro Display does.
+   */
+  .display {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+
+  .display-xl {
+    font-family: var(--font-display);
+    font-weight: 700;
+    letter-spacing: -0.035em;
+    line-height: 0.95;
+    text-wrap: balance;
+  }
+
+  /** The instrument-panel label: mono, spaced, quiet. */
+  .label-caps {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-label-tertiary);
+  }
+
+  /** Running text, kept near 65 characters. */
+  .prose-measure {
+    max-width: 34em;
+    line-height: 1.65;
+    color: var(--color-label-secondary);
+  }
+}
+
+@layer components {
+  /** Long-form legal copy: one place to set the rhythm, so the pages stay plain. */
+  .legal {
+    color: var(--color-label-secondary);
+    font-size: 15px;
+    line-height: 1.7;
+  }
+
+  .legal h2 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 20px;
+    letter-spacing: -0.015em;
+    color: var(--color-label-primary);
+    margin-top: 2.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .legal h3 {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--color-label-primary);
+    margin-top: 1.5rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .legal p,
+  .legal ul {
+    max-width: 38em;
+    margin-bottom: 1rem;
+  }
+
+  .legal ul {
+    list-style: disc;
+    padding-left: 1.25rem;
+  }
+
+  .legal li {
+    margin-bottom: 0.35rem;
+  }
+
+  .legal a {
+    color: var(--color-label-primary);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .legal address {
+    font-style: normal;
+  }
+}
+
+@layer components {
+  .legal table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+    font-size: 13px;
+  }
+
+  .legal th {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-label-tertiary);
+    text-align: left;
+    padding: 0.75rem 1rem 0.75rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  }
+
+  .legal td {
+    padding: 0.75rem 1rem 0.75rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    vertical-align: top;
+  }
+}
