@@ -5,7 +5,7 @@ import Toybox.System;
 import Toybox.Time;
 import Toybox.UserProfile;
 
-// Reads the stats this watch exposes to apps and formats them for display/sharing.
+// Reads the stats this watch exposes to apps and formats them for display.
 module Stats {
 
     function setting(key) {
@@ -95,20 +95,6 @@ module Stats {
             }
         }
         return out;
-    }
-
-    // Plain-text card for the stats QR code: as many lines as fit in one code.
-    function shareText() {
-        var text = title() + " (Garmin)";
-        var body = lines(collect());
-        for (var i = 0; i < body.size(); i++) {
-            var next = text + "\n" + body[i];
-            if (next.toUtf8Array().size() > QrCode.MAX_BYTES) {
-                break;
-            }
-            text = next;
-        }
-        return text;
     }
 
     function distanceText(cm) {

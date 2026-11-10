@@ -1,4 +1,4 @@
-# StatCard — share your Strava & stats from a Garmin watch
+# StatCard — share your Strava and show your stats on a Garmin watch
 
 A Connect IQ watch app. Open it, hold the watch up, and the other person points
 their phone camera at it:
@@ -7,11 +7,10 @@ their phone camera at it:
 |---|---|
 | 1. **Strava** | QR code of your Strava profile link. Their camera opens it and they can follow you. |
 | 2. **Stats** | Steps today, distance over 7 days, active minutes this week, resting HR, VO2 max, last activity. |
-| 3. **My stats** | The same stats as a QR code, so their phone receives them as text. |
 
 Tap the screen (or press START), swipe, or use UP/DOWN to change pages. BACK exits.
 
-![Preview on a 260 px round screen](docs/preview.png)
+![Strava QR page on a 260 px round screen](docs/preview.png)
 
 ## Why a QR code and not NFC "tap"
 
@@ -62,7 +61,6 @@ even as a private beta, the link and name can be changed from the phone (*Garmin
 
 - Which stats appear depends on what your watch exposes to apps. Missing stats are hidden.
   Units follow the watch's metric or statute setting.
-- The stats QR holds up to 134 bytes. Lines that don't fit are left off the end.
 - The screen backlight turns on when you open the app or change page, which makes scanning easier.
 
 ## Tests

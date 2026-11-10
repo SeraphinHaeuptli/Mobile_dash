@@ -4,15 +4,15 @@ import Toybox.Lang;
 import Toybox.System;
 import Toybox.WatchUi;
 
-// Page 0: Strava profile QR. Page 1: stats card. Page 2: stats as a QR code.
+// Page 0: Strava profile QR. Page 1: stats card.
 class StatCardView extends WatchUi.View {
 
-    const PAGES = 3;
+    const PAGES = 2;
 
     hidden var _page = 0;
-    // Encoded QR per page, re-encoded only when the text changes.
-    hidden var _qrTexts = [null, null, null];
-    hidden var _qrs = [null, null, null];
+    // Encoded QR, re-encoded only when the text changes.
+    hidden var _qrText = null;
+    hidden var _qr = null;
 
     function initialize() {
         View.initialize();
@@ -38,19 +38,17 @@ class StatCardView extends WatchUi.View {
             } else {
                 drawQr(dc, "Strava", url);
             }
-        } else if (_page == 1) {
-            drawLines(dc, Stats.title(), Stats.lines(Stats.collect()));
         } else {
-            drawQr(dc, "My stats", Stats.shareText());
+            drawLines(dc, Stats.title(), Stats.lines(Stats.collect()));
         }
     }
 
     hidden function drawQr(dc, title, text) {
-        if (!text.equals(_qrTexts[_page])) {
-            _qrs[_page] = QrCode.encode(text.toUtf8Array());
-            _qrTexts[_page] = text;
+        if (!text.equals(_qrText)) {
+            _qr = QrCode.encode(text.toUtf8Array());
+            _qrText = text;
         }
-        var rows = _qrs[_page];
+        var rows = _qr;
         if (rows == null) {
             drawLines(dc, title, ["Too long for", "a QR code"]);
             return;
