@@ -1,0 +1,6 @@
+<strings>
+    <string id="AppName">StatCard</string>
+    <string id="StravaUrlTitle">Strava profile link</string>
+    <string id="StravaUrlPrompt">e.g. https://www.strava.com/athletes/12345678</string>
+    <string id="DisplayNameTitle">Your name (shown on stats)</string>
+</strings>

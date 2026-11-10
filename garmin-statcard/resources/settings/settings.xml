@@ -1,0 +1,8 @@
+<settings>
+    <setting propertyKey="@Properties.stravaUrl" title="@Strings.StravaUrlTitle" prompt="@Strings.StravaUrlPrompt">
+        <settingConfig type="alphaNumeric" />
+    </setting>
+    <setting propertyKey="@Properties.displayName" title="@Strings.DisplayNameTitle">
+        <settingConfig type="alphaNumeric" />
+    </setting>
+</settings>

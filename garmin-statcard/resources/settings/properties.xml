@@ -1,0 +1,5 @@
+<properties>
+    <!-- Sideloading? Put your link/name here before building. -->
+    <property id="stravaUrl" type="string"></property>
+    <property id="displayName" type="string"></property>
+</properties>
